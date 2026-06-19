@@ -1,5 +1,0 @@
-width=21600
-height=10800
-tile_size=512
-columns=43
-rows=22

@@ -214,8 +214,9 @@ python3 scripts/prepare_assets.py --map-only
 Expected local sizes are roughly 320 MB for the zip, 677 MB for
 `world_map_highres.tif`, and a few hundred MB for the generated 512px tile set,
 depending on whether you keep PNG fallbacks alongside QOI files. The
-high-resolution source is intentionally ignored by Git; commit or deploy
-`assets/maps/tiles/` depending on how you want to distribute runtime assets.
+high-resolution source and generated `assets/maps/tiles/` directory are
+intentionally ignored by Git. Generate them locally with the commands above, then
+sync `assets/maps/tiles/` to the Pi as part of your runtime asset deploy.
 
 ## Desktop Build
 

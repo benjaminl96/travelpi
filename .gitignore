@@ -14,6 +14,7 @@ __pycache__/
 .DS_Store
 assets/source/maps/NATURAL_EARTH_II_README.html
 assets/source/maps/world_map_highres.*
+assets/maps/tiles/
 
 # Personal trip data and generated config
 config/trips.json

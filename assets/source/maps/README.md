@@ -37,5 +37,7 @@ python3 scripts/prepare_assets.py --map-only
 ```
 
 The high-resolution source is intentionally ignored by Git because it is several
-hundred MB. The generated runtime tiles live in `assets/maps/tiles/`; QOI files
-are preferred at runtime, with PNG fallback available for development.
+hundred MB. The generated runtime tiles live in `assets/maps/tiles/` and are
+also ignored by Git; generate them locally and sync them to the Pi with the rest
+of the runtime assets. QOI files are preferred at runtime, with PNG fallback
+available for development.
