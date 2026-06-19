@@ -22,8 +22,11 @@
         <button class="tab active" data-tab="edit">Trip</button>
         <button class="tab" data-tab="import">Import</button>
         <button class="tab" data-tab="jobs">Jobs</button>
-        <button id="preparePhotos">Prepare photos</button>
-        <button id="prepareAll">Prepare all</button>
+        <span class="prep-actions" id="prepActions">
+          <button id="preparePhotos" hidden>Prepare photos</button>
+          <button id="prepareAll" hidden>Prepare all</button>
+          <small id="prepStatus"></small>
+        </span>
         <button id="restartDisplay">Restart display</button>
       </nav>
 

@@ -26,6 +26,8 @@ MANIFEST_PATH = ROOT / "config/trips.json"
 EXAMPLE_MANIFEST_PATH = ROOT / "config/trips.example.json"
 SOURCE_PHOTO_ROOT = ROOT / "assets/source/photos"
 PREPARED_PHOTO_ROOT = ROOT / "assets/photos"
+SOURCE_MAP_ROOT = ROOT / "assets/source/maps"
+MAP_ROOT = ROOT / "assets/maps"
 STATIC_ROOT = ROOT / "admin/static"
 TEMPLATE_ROOT = ROOT / "admin/templates"
 UPLOAD_CACHE = ROOT / ".asset-cache/admin/uploads"
@@ -160,6 +162,122 @@ def next_photo_filename(slug, index):
         index += 1
         candidate = SOURCE_PHOTO_ROOT / f"{slug}_{index:02d}.jpg"
     return candidate
+
+
+def mtime(path):
+    try:
+        return path.stat().st_mtime
+    except FileNotFoundError:
+        return 0
+
+
+def qoiconv_available():
+    return (ROOT / ".asset-cache/bin/qoiconv").exists() or shutil.which("qoiconv") is not None
+
+
+def photo_source_for_path(rel_path):
+    name = Path(rel_path).name
+    source = SOURCE_PHOTO_ROOT / name
+
+    if source.exists():
+        return source
+
+    fallback = ROOT / rel_path
+    return fallback if fallback.exists() else source
+
+
+def photo_asset_status(manifest):
+    reasons = []
+    dirty_count = 0
+    wants_qoi = qoiconv_available()
+    seen = set()
+
+    for trip in manifest.get("trips", []):
+        for photo in trip.get("photos", []):
+            rel = photo.get("path")
+
+            if not rel or rel in seen:
+                continue
+
+            seen.add(rel)
+            dest = ROOT / rel
+            source = photo_source_for_path(rel)
+            qoi_dest = dest.with_suffix(".qoi")
+            photo_dirty = False
+
+            if not source.exists():
+                photo_dirty = True
+                reasons.append(f"Missing source for {Path(rel).name}")
+            elif not dest.exists():
+                photo_dirty = True
+                reasons.append(f"{Path(rel).name} has not been prepared")
+            elif mtime(source) > mtime(dest):
+                photo_dirty = True
+                reasons.append(f"{Path(rel).name} source changed")
+
+            if wants_qoi and dest.exists() and (not qoi_dest.exists() or mtime(dest) > mtime(qoi_dest)):
+                photo_dirty = True
+                reasons.append(f"{qoi_dest.name} needs updating")
+
+            if photo_dirty:
+                dirty_count += 1
+
+    return {
+        "dirty": dirty_count > 0,
+        "count": dirty_count,
+        "reasons": reasons[:6],
+    }
+
+
+def newest_existing(paths):
+    return max((mtime(path) for path in paths if path.exists()), default=0)
+
+
+def map_asset_status():
+    reasons = []
+    source = SOURCE_MAP_ROOT / "world_map.png"
+    highres_sources = [
+        SOURCE_MAP_ROOT / "world_map_highres.png",
+        SOURCE_MAP_ROOT / "world_map_highres.tif",
+        SOURCE_MAP_ROOT / "world_map_highres.tiff",
+        SOURCE_MAP_ROOT / "world_map_highres.jpg",
+        SOURCE_MAP_ROOT / "world_map_highres.jpeg",
+    ]
+    map_png = MAP_ROOT / "world_map.png"
+    map_qoi = MAP_ROOT / "world_map.qoi"
+    tiles_meta = MAP_ROOT / "tiles/tiles.txt"
+    wants_qoi = qoiconv_available()
+    source_time = mtime(source)
+    highres_time = newest_existing(highres_sources)
+
+    if source.exists() and (not map_png.exists() or source_time > mtime(map_png)):
+        reasons.append("Base map needs preparing")
+
+    if wants_qoi and map_png.exists() and (not map_qoi.exists() or mtime(map_png) > mtime(map_qoi)):
+        reasons.append("Base map QOI needs updating")
+
+    if highres_time > 0 and (not tiles_meta.exists() or highres_time > mtime(tiles_meta)):
+        reasons.append("High-resolution map tiles need preparing")
+
+    return {
+        "dirty": len(reasons) > 0,
+        "count": len(reasons),
+        "reasons": reasons[:6],
+    }
+
+
+def asset_status(manifest):
+    photos = photo_asset_status(manifest)
+    maps = map_asset_status()
+
+    return {
+        "photos": photos,
+        "map": maps,
+        "all": {
+            "dirty": photos["dirty"] or maps["dirty"],
+            "reasons": (photos["reasons"] + maps["reasons"])[:6],
+        },
+    }
 
 
 def run_command(command, job):
@@ -494,6 +612,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             self.send_json({
                 "trips": [public_trip(trip) for trip in manifest.get("trips", [])],
                 "manifest": str(MANIFEST_PATH.relative_to(ROOT)),
+                "assets": asset_status(manifest),
                 "jobs": jobs,
             })
             return
@@ -509,13 +628,11 @@ class AdminHandler(BaseHTTPRequestHandler):
                 fields, files = multipart_parts(self)
                 trip, gps_count, total = build_import_trip(fields, files)
                 index = append_or_replace_trip(trip)
-                job = prepare_job("photos")
                 self.send_json({
                     "trip": public_trip(trip),
                     "index": index,
                     "gps_count": gps_count,
                     "photo_count": total,
-                    "job": job["id"],
                 }, HTTPStatus.CREATED)
                 return
 
@@ -523,8 +640,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             if match:
                 fields, files = multipart_parts(self)
                 count, gps_count = add_photos_to_trip(int(match.group(1)), files)
-                job = prepare_job("photos")
-                self.send_json({"photo_count": count, "gps_count": gps_count, "job": job["id"]}, HTTPStatus.CREATED)
+                self.send_json({"photo_count": count, "gps_count": gps_count}, HTTPStatus.CREATED)
                 return
 
             if path == "/api/trips":

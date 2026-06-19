@@ -40,7 +40,31 @@ async function loadState(options = {}) {
   if (selected >= state.trips.length && !preserveEditor) selected = Math.max(0, state.trips.length - 1);
   renderTrips();
   if (!preserveEditor) renderEditor();
+  renderPrepStatus();
   renderJobs();
+}
+
+function reasonText(reasons) {
+  if (!reasons || reasons.length === 0) return "";
+  return reasons.length === 1 ? reasons[0] : `${reasons[0]} + ${reasons.length - 1} more`;
+}
+
+function renderPrepStatus() {
+  const assets = state.assets || {};
+  const photos = assets.photos || {};
+  const map = assets.map || {};
+  const preparePhotos = $("#preparePhotos");
+  const prepareAll = $("#prepareAll");
+  const prepStatus = $("#prepStatus");
+  const reasons = [];
+
+  preparePhotos.hidden = !photos.dirty;
+  prepareAll.hidden = !map.dirty;
+
+  if (photos.dirty) reasons.push(`Photos: ${reasonText(photos.reasons)}`);
+  if (map.dirty) reasons.push(`Map: ${reasonText(map.reasons)}`);
+
+  prepStatus.textContent = reasons.length ? reasons.join(" · ") : "Assets are current";
 }
 
 function tripDate(trip) {
@@ -206,7 +230,7 @@ async function uploadToTrip(files) {
   const form = new FormData();
   [...files].forEach(file => form.append("photos", file));
   const result = await api(`/api/trips/${selected}/photos`, { method: "POST", body: form });
-  showToast(`Uploaded ${result.photo_count} photos; prep job #${result.job}`);
+  showToast(`Uploaded ${result.photo_count} photos. Prepare photos is now available.`);
   editorDirty = false;
   await loadState({ forceEditor: true });
 }
@@ -216,7 +240,7 @@ async function importTrip() {
   importFiles.forEach(file => form.append("photos", file));
   const result = await api("/api/import", { method: "POST", body: form });
   selected = result.index;
-  showToast(`Imported ${result.photo_count} photos; prep job #${result.job}`);
+  showToast(`Imported ${result.photo_count} photos. Prepare photos is now available.`);
   importFiles = [];
   $("#importUpload").value = "";
   editorDirty = false;

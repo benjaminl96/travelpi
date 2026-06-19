@@ -99,6 +99,17 @@ button.primary {
   margin-bottom: 18px;
 }
 
+.prep-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+}
+
+.prep-actions small {
+  color: var(--muted);
+}
+
 .tab.active {
   border-color: var(--green);
   color: #d8f0d2;

@@ -172,6 +172,8 @@ The web UI can:
 - Read EXIF GPS/date metadata where available and compute a trip center.
 - Reorder or remove photos from a trip.
 - Run `scripts/prepare_assets.py` in a background job and stream job logs.
+- Show prep buttons only when the corresponding photo or map assets are stale
+  or missing.
 - Trigger a best-effort systemd restart if you set `TRAVELPI_RESTART_COMMAND`
   or run the packaged service names.
 
