@@ -23,6 +23,7 @@ can render directly to the Linux graphics stack without X11 or Wayland.
 │   └── source/
 ├── scripts/
 │   ├── build_raylib_drm.sh
+│   ├── build_qoiconv.sh
 │   ├── generate_travel_config.py
 │   ├── import_trip.py
 │   ├── prepare_assets.py
@@ -73,6 +74,7 @@ runtime is:
 
 ```sh
 python3 -m pip install -r requirements-dev.txt
+./scripts/build_qoiconv.sh
 
 python3 scripts/import_trip.py ~/Pictures/Iceland \
   --name "Iceland Ring Road" \
@@ -119,6 +121,7 @@ You can also put original media here directly:
 
 ```text
 assets/source/maps/world_map.png
+assets/source/maps/world_map_highres.tif    # optional, used for close-zoom tiles
 assets/source/photos/*.jpg
 ```
 
@@ -131,9 +134,49 @@ python3 scripts/prepare_assets.py --width 1920
 The script resizes each configured photo to the exact long-edge size implied by
 its `PhotoSpec.scale` at 1920px, with a default minimum long edge of 1280px for
 the non-overlapping gallery layout, and writes the prepared files into
-`assets/photos/`. It also prepares `assets/maps/world_map.png` and will generate
-`assets/maps/world_map.qoi` when `qoiconv` is installed. The app prefers QOI and
-falls back to PNG.
+`assets/photos/`. When `.asset-cache/bin/qoiconv` exists, it also writes sibling
+QOI files for faster runtime decode. It prepares a Pi-friendly base map at
+`assets/maps/world_map.png` and cuts `assets/maps/tiles/` into 512px close-zoom
+tiles. The app draws the base map for macro views, then loads only visible tiles
+near the camera for sharper close zooms. If `assets/source/maps/world_map_highres.*`
+exists, tile prep uses it while keeping the base map capped. QOI files are
+generated when `qoiconv` is available; the app falls back to PNG/JPEG.
+
+### High-Resolution Map Tiles
+
+The tracked `assets/source/maps/world_map.png` is a modest 4096x2048 source map.
+That is enough for macro world views, but close zooms need a larger local source.
+For the sharp tile set used during regional zooms, download Natural Earth's
+1:10m **Natural Earth II with Shaded Relief and Water** large raster:
+
+```sh
+mkdir -p .asset-cache/naturalearth assets/source/maps
+curl -L --fail \
+  -o .asset-cache/naturalearth/NE2_HR_LC_SR_W.zip \
+  https://naciscdn.org/naturalearth/10m/raster/NE2_HR_LC_SR_W.zip
+
+unzip -o .asset-cache/naturalearth/NE2_HR_LC_SR_W.zip \
+  NE2_HR_LC_SR_W.tif \
+  NE2_HR_LC_SR_W.VERSION.txt \
+  NE2_HR_LC_SR_W.README.html \
+  -d .asset-cache/naturalearth
+
+mv .asset-cache/naturalearth/NE2_HR_LC_SR_W.tif \
+  assets/source/maps/world_map_highres.tif
+cp .asset-cache/naturalearth/NE2_HR_LC_SR_W.VERSION.txt \
+  assets/source/maps/NATURAL_EARTH_II_HR_VERSION.txt
+cp .asset-cache/naturalearth/NE2_HR_LC_SR_W.README.html \
+  assets/source/maps/NATURAL_EARTH_II_HR_README.html
+
+./scripts/build_qoiconv.sh
+python3 scripts/prepare_assets.py --map-only
+```
+
+Expected local sizes are roughly 320 MB for the zip, 677 MB for
+`world_map_highres.tif`, and a few hundred MB for the generated 512px tile set,
+depending on whether you keep PNG fallbacks alongside QOI files. The
+high-resolution source is intentionally ignored by Git; commit or deploy
+`assets/maps/tiles/` depending on how you want to distribute runtime assets.
 
 ## Desktop Build
 

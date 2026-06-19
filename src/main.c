@@ -42,6 +42,36 @@ typedef struct PhotoBank {
     bool valid;
 } PhotoBank;
 
+typedef struct MapTileSlot {
+    TextureSlot texture;
+    int tile_x;
+    int tile_y;
+    unsigned int last_used;
+    bool valid;
+} MapTileSlot;
+
+typedef struct MapTileCache {
+    MapTileSlot slots[TRAVELPI_MAP_TILE_CACHE_CAPACITY];
+    int source_width;
+    int source_height;
+    int tile_size;
+    int columns;
+    int rows;
+    float scale_x;
+    float scale_y;
+    unsigned int frame_id;
+    int loads_this_frame;
+    bool enabled;
+} MapTileCache;
+
+typedef struct MapTileRange {
+    int min_x;
+    int min_y;
+    int max_x;
+    int max_y;
+    bool valid;
+} MapTileRange;
+
 typedef struct SmoothCamera {
     Vector2 target;
     float zoom;
@@ -60,6 +90,7 @@ typedef struct FrameProfiler {
 typedef struct TravelRuntime {
     TextureSlot map;
     TextureSlot paper;
+    MapTileCache tiles;
     PhotoBank current_bank;
     PhotoBank preload_bank;
     size_t location_index;
@@ -110,6 +141,13 @@ static float MaxFloat(float a, float b)
     return (a > b) ? a : b;
 }
 
+static int ClampInt(int value, int min_value, int max_value)
+{
+    if (value < min_value) return min_value;
+    if (value > max_value) return max_value;
+    return value;
+}
+
 static Rectangle InsetRectangle(Rectangle rect, float amount)
 {
     return (Rectangle) {
@@ -118,12 +156,6 @@ static Rectangle InsetRectangle(Rectangle rect, float amount)
         MaxFloat(rect.width - amount*2.0f, 1.0f),
         MaxFloat(rect.height - amount*2.0f, 1.0f),
     };
-}
-
-static unsigned char ColorByteFromFloat(float value)
-{
-    const int channel = (int)(Clamp01(value)*255.0f + 0.5f);
-    return (unsigned char)channel;
 }
 
 static unsigned char ColorByteFromInt(int value)
@@ -144,6 +176,7 @@ static unsigned int HashU32(unsigned int value)
 }
 
 static Texture2D UploadCheckedTexture(int width, int height, Color a, Color b);
+static void UnloadTextureSlot(TextureSlot *slot);
 
 static int PhotoGridColumnCount(int count)
 {
@@ -178,46 +211,6 @@ static void BuildPhotoGrid(Rectangle *cells, int count, Rectangle area, float ga
     }
 }
 
-static void ApplyPaperMapGrade(Image *image)
-{
-    ImageFormat(image, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
-    Color *pixels = (Color *)image->data;
-    const int pixel_count = image->width*image->height;
-
-    if (pixels == NULL) {
-        return;
-    }
-
-    for (int i = 0; i < pixel_count; ++i) {
-        const Color source = pixels[i];
-        float r = (float)source.r/255.0f;
-        float g = (float)source.g/255.0f;
-        float b = (float)source.b/255.0f;
-        const float luminance = r*0.299f + g*0.587f + b*0.114f;
-        const float desaturate = 0.50f;
-        const float paper_mix = 0.12f;
-
-        r = LerpFloat(r, luminance, desaturate);
-        g = LerpFloat(g, luminance, desaturate);
-        b = LerpFloat(b, luminance, desaturate);
-
-        r = (r - 0.5f)*0.86f + 0.5f;
-        g = (g - 0.5f)*0.86f + 0.5f;
-        b = (b - 0.5f)*0.86f + 0.5f;
-
-        r = LerpFloat(r, 0.90f, paper_mix)*1.05f;
-        g = LerpFloat(g, 0.84f, paper_mix)*1.00f;
-        b = LerpFloat(b, 0.68f, paper_mix)*0.88f;
-
-        pixels[i] = (Color) {
-            ColorByteFromFloat(r),
-            ColorByteFromFloat(g),
-            ColorByteFromFloat(b),
-            source.a,
-        };
-    }
-}
-
 static TextureSlot CreatePaperTexture(void)
 {
     enum { PAPER_SIZE = 256 };
@@ -228,8 +221,8 @@ static TextureSlot CreatePaperTexture(void)
         slot.texture = UploadCheckedTexture(
             PAPER_SIZE,
             PAPER_SIZE,
-            (Color) { 226, 214, 178, 255 },
-            (Color) { 215, 199, 160, 255 });
+            (Color) { 194, 171, 121, 255 },
+            (Color) { 178, 151, 100, 255 });
         slot.loaded = (slot.texture.id != 0);
         return slot;
     }
@@ -248,9 +241,9 @@ static TextureSlot CreatePaperTexture(void)
 
             const int value = grain + fiber + fleck;
             pixels[y*PAPER_SIZE + x] = (Color) {
-                ColorByteFromInt(226 + value),
-                ColorByteFromInt(214 + value),
-                ColorByteFromInt(178 + value/2),
+                ColorByteFromInt(194 + value),
+                ColorByteFromInt(171 + value),
+                ColorByteFromInt(121 + value/2),
                 255,
             };
         }
@@ -309,16 +302,16 @@ static TextureSlot LoadMapTexture(void)
 
     if (FileExists(path)) {
         Image image = LoadImage(path);
-        ApplyPaperMapGrade(&image);
         slot.texture = LoadTextureFromImage(image);
         UnloadImage(image);
         SetTextureFilter(slot.texture, TEXTURE_FILTER_BILINEAR);
+        SetTextureWrap(slot.texture, TEXTURE_WRAP_CLAMP);
     } else if (FileExists(fallback_path)) {
         Image image = LoadImage(fallback_path);
-        ApplyPaperMapGrade(&image);
         slot.texture = LoadTextureFromImage(image);
         UnloadImage(image);
         SetTextureFilter(slot.texture, TEXTURE_FILTER_BILINEAR);
+        SetTextureWrap(slot.texture, TEXTURE_WRAP_CLAMP);
     } else {
         slot.texture = UploadCheckedTexture(
             TRAVELPI_PLACEHOLDER_MAP_WIDTH,
@@ -331,10 +324,188 @@ static TextureSlot LoadMapTexture(void)
     return slot;
 }
 
+static const char *MapTilePath(const char *format, int tile_x, int tile_y)
+{
+    static char buffers[4][256];
+    static int slot = 0;
+    char *buffer = buffers[slot];
+    slot = (slot + 1) % 4;
+    snprintf(buffer, 256, format, tile_x, tile_y);
+    return AssetPath(buffer);
+}
+
+static const char *SiblingQoiPath(const char *relative_path)
+{
+    static char buffers[4][512];
+    static int slot = 0;
+    char *buffer = buffers[slot];
+    const char *dot = strrchr(relative_path, '.');
+    size_t prefix_length = (dot == NULL) ? strlen(relative_path) : (size_t)(dot - relative_path);
+
+    slot = (slot + 1) % 4;
+    if (prefix_length > 500) {
+        prefix_length = 500;
+    }
+
+    snprintf(buffer, 512, "%.*s.qoi", (int)prefix_length, relative_path);
+    return AssetPath(buffer);
+}
+
+static TextureSlot LoadMapTileTexture(int tile_x, int tile_y)
+{
+    TextureSlot slot = { 0 };
+    const char *path = MapTilePath(TRAVELPI_MAP_TILE_PATH_FORMAT, tile_x, tile_y);
+
+    if (!FileExists(path)) {
+        path = MapTilePath(TRAVELPI_MAP_TILE_FALLBACK_PATH_FORMAT, tile_x, tile_y);
+    }
+
+    if (FileExists(path)) {
+        Image image = LoadImage(path);
+        slot.texture = LoadTextureFromImage(image);
+        UnloadImage(image);
+        SetTextureFilter(slot.texture, TEXTURE_FILTER_BILINEAR);
+        SetTextureWrap(slot.texture, TEXTURE_WRAP_CLAMP);
+    }
+
+    slot.loaded = (slot.texture.id != 0);
+    return slot;
+}
+
+static void ResetMapTileCache(MapTileCache *cache)
+{
+    memset(cache, 0, sizeof(*cache));
+
+    for (int i = 0; i < TRAVELPI_MAP_TILE_CACHE_CAPACITY; ++i) {
+        cache->slots[i].tile_x = -1;
+        cache->slots[i].tile_y = -1;
+    }
+}
+
+static void UnloadMapTileCache(MapTileCache *cache)
+{
+    for (int i = 0; i < TRAVELPI_MAP_TILE_CACHE_CAPACITY; ++i) {
+        UnloadTextureSlot(&cache->slots[i].texture);
+    }
+
+    ResetMapTileCache(cache);
+}
+
+static bool LoadMapTileMetadata(MapTileCache *cache, const Texture2D base_map)
+{
+    FILE *file = fopen(AssetPath(TRAVELPI_MAP_TILE_METADATA_PATH), "r");
+    char line[128];
+    int source_width = 0;
+    int source_height = 0;
+    int tile_size = 0;
+    int columns = 0;
+    int rows = 0;
+
+    ResetMapTileCache(cache);
+
+    if (file == NULL) {
+        return false;
+    }
+
+    while (fgets(line, sizeof(line), file) != NULL) {
+        sscanf(line, "width=%d", &source_width);
+        sscanf(line, "height=%d", &source_height);
+        sscanf(line, "tile_size=%d", &tile_size);
+        sscanf(line, "columns=%d", &columns);
+        sscanf(line, "rows=%d", &rows);
+    }
+
+    fclose(file);
+
+    if (source_width <= 0 || source_height <= 0 || tile_size <= 0 ||
+        columns <= 0 || rows <= 0 || base_map.width <= 0 || base_map.height <= 0) {
+        ResetMapTileCache(cache);
+        return false;
+    }
+
+    cache->source_width = source_width;
+    cache->source_height = source_height;
+    cache->tile_size = tile_size;
+    cache->columns = columns;
+    cache->rows = rows;
+    cache->scale_x = (float)source_width/(float)base_map.width;
+    cache->scale_y = (float)source_height/(float)base_map.height;
+    cache->enabled = true;
+    return true;
+}
+
+static MapTileSlot *FindMapTileSlot(MapTileCache *cache, int tile_x, int tile_y)
+{
+    for (int i = 0; i < TRAVELPI_MAP_TILE_CACHE_CAPACITY; ++i) {
+        MapTileSlot *slot = &cache->slots[i];
+
+        if (slot->valid && slot->tile_x == tile_x && slot->tile_y == tile_y) {
+            return slot;
+        }
+    }
+
+    return NULL;
+}
+
+static MapTileSlot *ChooseMapTileSlot(MapTileCache *cache)
+{
+    MapTileSlot *oldest = &cache->slots[0];
+
+    for (int i = 0; i < TRAVELPI_MAP_TILE_CACHE_CAPACITY; ++i) {
+        MapTileSlot *slot = &cache->slots[i];
+
+        if (!slot->valid) {
+            return slot;
+        }
+
+        if (slot->last_used < oldest->last_used) {
+            oldest = slot;
+        }
+    }
+
+    UnloadTextureSlot(&oldest->texture);
+    oldest->valid = false;
+    oldest->tile_x = -1;
+    oldest->tile_y = -1;
+    return oldest;
+}
+
+static MapTileSlot *GetMapTileSlot(MapTileCache *cache, int tile_x, int tile_y)
+{
+    MapTileSlot *slot = FindMapTileSlot(cache, tile_x, tile_y);
+
+    if (slot != NULL) {
+        slot->last_used = cache->frame_id;
+        return slot;
+    }
+
+    if (cache->loads_this_frame >= TRAVELPI_MAP_TILE_LOADS_PER_FRAME) {
+        return NULL;
+    }
+
+    slot = ChooseMapTileSlot(cache);
+    slot->texture = LoadMapTileTexture(tile_x, tile_y);
+    cache->loads_this_frame++;
+
+    if (!slot->texture.loaded) {
+        return NULL;
+    }
+
+    slot->tile_x = tile_x;
+    slot->tile_y = tile_y;
+    slot->last_used = cache->frame_id;
+    slot->valid = true;
+    return slot;
+}
+
 static TextureSlot LoadPhotoTexture(const char *relative_path, int fallback_index)
 {
     TextureSlot slot = { 0 };
-    const char *path = AssetPath(relative_path);
+    const char *path = SiblingQoiPath(relative_path);
+
+    if (!FileExists(path)) {
+        path = AssetPath(relative_path);
+    }
 
     if (FileExists(path)) {
         Image image = LoadImage(path);
@@ -628,7 +799,7 @@ static void UpdateSmoothCamera(TravelRuntime *runtime, float dt)
 static void DrawPaperTexture(const TravelRuntime *runtime, Rectangle area, float alpha)
 {
     if (!runtime->paper.loaded || (runtime->paper.texture.id == 0)) {
-        DrawRectangleRec(area, Fade((Color) { 226, 214, 178, 255 }, alpha));
+        DrawRectangleRec(area, Fade((Color) { 194, 171, 121, 255 }, alpha));
         return;
     }
 
@@ -641,7 +812,92 @@ static void DrawPaperTexture(const TravelRuntime *runtime, Rectangle area, float
         Fade(WHITE, alpha));
 }
 
-static void DrawMap(const TravelRuntime *runtime, int screen_width, int screen_height)
+static MapTileRange VisibleMapTileRange(const TravelRuntime *runtime, int screen_width, int screen_height)
+{
+    const MapTileCache *cache = &runtime->tiles;
+    MapTileRange range = { 0 };
+
+    if (!cache->enabled || cache->tile_size <= 0) {
+        return range;
+    }
+
+    const float half_width = ((float)screen_width*0.5f)/runtime->camera.zoom;
+    const float half_height = ((float)screen_height*0.5f)/runtime->camera.zoom;
+    const float source_left = MaxFloat((runtime->camera.target.x - half_width)*cache->scale_x, 0.0f);
+    const float source_top = MaxFloat((runtime->camera.target.y - half_height)*cache->scale_y, 0.0f);
+    const float source_right = MinFloat((runtime->camera.target.x + half_width)*cache->scale_x, (float)cache->source_width);
+    const float source_bottom = MinFloat((runtime->camera.target.y + half_height)*cache->scale_y, (float)cache->source_height);
+
+    range.min_x = ClampInt((int)floorf(source_left/(float)cache->tile_size) - 1, 0, cache->columns - 1);
+    range.min_y = ClampInt((int)floorf(source_top/(float)cache->tile_size) - 1, 0, cache->rows - 1);
+    range.max_x = ClampInt((int)floorf(source_right/(float)cache->tile_size) + 1, 0, cache->columns - 1);
+    range.max_y = ClampInt((int)floorf(source_bottom/(float)cache->tile_size) + 1, 0, cache->rows - 1);
+    range.valid = true;
+    return range;
+}
+
+static void UpdateVisibleMapTiles(TravelRuntime *runtime, int screen_width, int screen_height)
+{
+    MapTileCache *cache = &runtime->tiles;
+    const float tile_alpha = SmoothStep01((runtime->camera.zoom - TRAVELPI_MAP_TILE_MIN_ZOOM)/0.65f);
+    const MapTileRange range = VisibleMapTileRange(runtime, screen_width, screen_height);
+
+    if (!range.valid || tile_alpha <= 0.001f) {
+        return;
+    }
+
+    cache->frame_id++;
+    cache->loads_this_frame = 0;
+
+    for (int tile_y = range.min_y; tile_y <= range.max_y; ++tile_y) {
+        for (int tile_x = range.min_x; tile_x <= range.max_x; ++tile_x) {
+            GetMapTileSlot(cache, tile_x, tile_y);
+        }
+    }
+}
+
+static void DrawVisibleMapTiles(const TravelRuntime *runtime, int screen_width, int screen_height)
+{
+    MapTileCache *cache = (MapTileCache *)&runtime->tiles;
+    const float tile_alpha = SmoothStep01((runtime->camera.zoom - TRAVELPI_MAP_TILE_MIN_ZOOM)/0.65f);
+    const MapTileRange range = VisibleMapTileRange(runtime, screen_width, screen_height);
+
+    if (!range.valid || tile_alpha <= 0.001f) {
+        return;
+    }
+
+    for (int tile_y = range.min_y; tile_y <= range.max_y; ++tile_y) {
+        for (int tile_x = range.min_x; tile_x <= range.max_x; ++tile_x) {
+            MapTileSlot *slot = FindMapTileSlot(cache, tile_x, tile_y);
+
+            if (slot == NULL || !slot->texture.loaded || slot->texture.texture.id == 0) {
+                continue;
+            }
+
+            const float source_x = (float)(tile_x*cache->tile_size);
+            const float source_y = (float)(tile_y*cache->tile_size);
+            const float source_width = (float)slot->texture.texture.width;
+            const float source_height = (float)slot->texture.texture.height;
+            const float bleed = 0.75f;
+            const Rectangle dest = {
+                (source_x - bleed)/cache->scale_x,
+                (source_y - bleed)/cache->scale_y,
+                (source_width + bleed*2.0f)/cache->scale_x,
+                (source_height + bleed*2.0f)/cache->scale_y,
+            };
+
+            DrawTexturePro(
+                slot->texture.texture,
+                (Rectangle) { 0.0f, 0.0f, source_width, source_height },
+                dest,
+                (Vector2) { 0.0f, 0.0f },
+                0.0f,
+                Fade(WHITE, tile_alpha));
+        }
+    }
+}
+
+static void DrawMap(TravelRuntime *runtime, int screen_width, int screen_height)
 {
     Camera2D camera = { 0 };
     camera.offset = (Vector2) { (float)screen_width*0.5f, (float)screen_height*0.5f };
@@ -651,9 +907,10 @@ static void DrawMap(const TravelRuntime *runtime, int screen_width, int screen_h
 
     BeginMode2D(camera);
         DrawTexture(runtime->map.texture, 0, 0, WHITE);
+        DrawVisibleMapTiles(runtime, screen_width, screen_height);
     EndMode2D();
-    DrawRectangle(0, 0, screen_width, screen_height, Fade((Color) { 241, 229, 190, 255 }, 0.08f));
-    DrawPaperTexture(runtime, (Rectangle) { 0.0f, 0.0f, (float)screen_width, (float)screen_height }, 0.10f);
+    DrawRectangle(0, 0, screen_width, screen_height, Fade((Color) { 185, 139, 75, 255 }, 0.14f));
+    DrawPaperTexture(runtime, (Rectangle) { 0.0f, 0.0f, (float)screen_width, (float)screen_height }, 0.08f);
 
     const bool photos_visible = (runtime->photo_alpha > 0.001f) &&
         (runtime->phase != TRIP_ZOOM_OUT);
@@ -783,7 +1040,7 @@ static void DrawOverlay(const TravelRuntime *runtime, int screen_width, int scre
     const int y = band_y + (int)MaxFloat(band_height*0.13f, 14.0f);
 
     if (page_count > 1) {
-        snprintf(caption, sizeof(caption), "%s   page %d/%d", location->caption, runtime->page_index + 1, page_count);
+        snprintf(caption, sizeof(caption), "page %d/%d", runtime->page_index + 1, page_count);
     } else {
         snprintf(caption, sizeof(caption), "%s", location->caption);
     }
@@ -795,14 +1052,14 @@ static void DrawOverlay(const TravelRuntime *runtime, int screen_width, int scre
         const int caption_x = screen_width - right_padding - caption_width;
         const int caption_y = band_y + (int)((band_height - (float)caption_size)*0.52f);
         const Rectangle band = { 0.0f, (float)band_y, (float)screen_width, band_height + 2.0f };
-        const Color ink = { 38, 45, 38, 255 };
-        const Color muted_ink = { 76, 84, 67, 255 };
+        const Color ink = { 34, 39, 31, 255 };
+        const Color muted_ink = { 66, 71, 55, 255 };
 
-        DrawRectangleGradientV(0, band_y - 32, screen_width, 32, (Color) { 0, 0, 0, 0 }, (Color) { 71, 57, 34, 74 });
-        DrawRectangleRec(band, (Color) { 231, 220, 186, 248 });
-        DrawPaperTexture(runtime, band, 0.58f);
-        DrawRectangleGradientV(0, band_y, screen_width, 18, (Color) { 112, 87, 48, 76 }, (Color) { 0, 0, 0, 0 });
-        DrawLine(0, band_y, screen_width, band_y, Fade((Color) { 84, 69, 43, 255 }, 0.58f));
+        DrawRectangleGradientV(0, band_y - 32, screen_width, 32, (Color) { 0, 0, 0, 0 }, (Color) { 55, 40, 22, 94 });
+        DrawRectangleRec(band, (Color) { 198, 175, 124, 250 });
+        DrawPaperTexture(runtime, band, 0.66f);
+        DrawRectangleGradientV(0, band_y, screen_width, 18, (Color) { 83, 59, 31, 90 }, (Color) { 0, 0, 0, 0 });
+        DrawLine(0, band_y, screen_width, band_y, Fade((Color) { 68, 48, 27, 255 }, 0.62f));
         DrawText(location->name, x, y, title_size, ink);
 
         if (has_date) {
@@ -889,6 +1146,7 @@ int main(int argc, char **argv)
     }
 
     runtime.paper = CreatePaperTexture();
+    LoadMapTileMetadata(&runtime.tiles, runtime.map.texture);
 
     runtime.macro_target = (Vector2) { (float)runtime.map.texture.width*0.5f, (float)runtime.map.texture.height*0.5f };
     runtime.macro_zoom = FitMapZoom(runtime.map.texture, screen_width, screen_height);
@@ -909,6 +1167,7 @@ int main(int argc, char **argv)
 
         UpdatePhase(&runtime, dt);
         UpdateSmoothCamera(&runtime, dt);
+        UpdateVisibleMapTiles(&runtime, screen_width, screen_height);
         const double draw_start = GetTime();
 
         BeginDrawing();
@@ -946,6 +1205,7 @@ int main(int argc, char **argv)
 
     UnloadPhotoBank(&runtime.current_bank);
     UnloadPhotoBank(&runtime.preload_bank);
+    UnloadMapTileCache(&runtime.tiles);
     UnloadTextureSlot(&runtime.paper);
     UnloadTextureSlot(&runtime.map);
     CloseWindow();

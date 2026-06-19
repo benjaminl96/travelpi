@@ -8,7 +8,7 @@
         "longitude": -86.4958
       },
       "pixel_nudge": [0.0, 0.0],
-      "close_zoom": 3.0,
+      "close_zoom": 10.0,
       "zoom_in_seconds": 2.35,
       "hold_seconds": 15.0,
       "fade_seconds": 0.45,
@@ -54,7 +54,7 @@
         "longitude": 2.3522
       },
       "pixel_nudge": [0.0, 0.0],
-      "close_zoom": 3.0,
+      "close_zoom": 10.0,
       "zoom_in_seconds": 2.35,
       "hold_seconds": 15.0,
       "fade_seconds": 0.45,

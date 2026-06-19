@@ -7,7 +7,7 @@ from pathlib import Path
 
 DEFAULTS = {
     "pixel_nudge": [0.0, 0.0],
-    "close_zoom": 3.0,
+    "close_zoom": 10.0,
     "zoom_in_seconds": 2.35,
     "hold_seconds": 15.0,
     "fade_seconds": 0.45,

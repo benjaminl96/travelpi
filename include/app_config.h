@@ -7,8 +7,14 @@
 
 #define TRAVELPI_MAP_PATH "assets/maps/world_map.qoi"
 #define TRAVELPI_MAP_FALLBACK_PATH "assets/maps/world_map.png"
+#define TRAVELPI_MAP_TILE_METADATA_PATH "assets/maps/tiles/tiles.txt"
+#define TRAVELPI_MAP_TILE_PATH_FORMAT "assets/maps/tiles/z1/tile_%03d_%03d.qoi"
+#define TRAVELPI_MAP_TILE_FALLBACK_PATH_FORMAT "assets/maps/tiles/z1/tile_%03d_%03d.png"
 #define TRAVELPI_PLACEHOLDER_MAP_WIDTH 4096
 #define TRAVELPI_PLACEHOLDER_MAP_HEIGHT 2048
+#define TRAVELPI_MAP_TILE_CACHE_CAPACITY 18
+#define TRAVELPI_MAP_TILE_LOADS_PER_FRAME 2
+#define TRAVELPI_MAP_TILE_MIN_ZOOM 5.00f
 
 #define TRAVELPI_MAX_PHOTOS_PER_LOCATION 6
 #define TRAVELPI_PREPARED_WIDTH 1920
