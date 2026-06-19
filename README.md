@@ -14,10 +14,16 @@ can render directly to the Linux graphics stack without X11 or Wayland.
 │   └── travel_config.h
 ├── src/
 │   ├── main.c
+│   ├── travel_config_loader.c
 │   └── travel_config.c        # generated locally
+├── admin/
+│   ├── travelpi_admin.py
+│   ├── static/
+│   └── templates/
 ├── config/
 │   └── trips.example.json
 ├── assets/
+│   ├── fonts/
 │   ├── maps/
 │   ├── photos/
 │   └── source/
@@ -29,7 +35,8 @@ can render directly to the Linux graphics stack without X11 or Wayland.
 │   ├── prepare_assets.py
 │   └── install_pi_deps.sh
 └── systemd/
-    └── travelpi.service
+    ├── travelpi.service
+    └── travelpi-admin.service
 ```
 
 ## Core Loop
@@ -38,7 +45,10 @@ can render directly to the Linux graphics stack without X11 or Wayland.
 - Loads one static equirectangular world map texture into VRAM and draws it
   through `Camera2D`.
 - Tracks camera target and zoom with framerate-independent exponential LERP.
-- Cycles through the compiled `TRAVELPI_LOCATIONS` array indefinitely.
+- Loads `config/trips.json` at runtime when present, with the generated
+  `TRAVELPI_LOCATIONS` array kept as a build-safe fallback.
+- Polls the local trip manifest every two seconds and hot-reloads valid changes
+  without restarting the renderer.
 - Per location: zoom in, fade a polaroid-style photo collage in, hold, fade the
   collage out, zoom back to the macro world map, advance to the next location.
 - Keeps memory pressure low by expecting pre-sized photo assets and only keeping
@@ -59,7 +69,9 @@ assets/source/photos/*
 Those paths are ignored by Git so personal photos and location history do not
 get pushed by accident. A fresh clone can still build because `make` generates
 `src/travel_config.c` from `config/trips.example.json` when your local
-`config/trips.json` does not exist.
+`config/trips.json` does not exist. At runtime, the app prefers the local JSON
+manifest and falls back to the generated C config only when the JSON is absent
+or invalid.
 
 To create an editable local manifest from the example:
 
@@ -142,6 +154,31 @@ near the camera for sharper close zooms. If `assets/source/maps/world_map_highre
 exists, tile prep uses it while keeping the base map capped. QOI files are
 generated when `qoiconv` is available; the app falls back to PNG/JPEG.
 
+## Admin Web UI
+
+Run the local admin surface from any machine on your LAN:
+
+```sh
+make admin
+```
+
+Then open `http://<pi-hostname-or-ip>:8080`. The admin UI intentionally has no
+login; it is meant for a trusted home network, not internet exposure.
+
+The web UI can:
+
+- Create and edit trips in `config/trips.json`.
+- Upload photos directly from the browser into `assets/source/photos/`.
+- Read EXIF GPS/date metadata where available and compute a trip center.
+- Reorder or remove photos from a trip.
+- Run `scripts/prepare_assets.py` in a background job and stream job logs.
+- Trigger a best-effort systemd restart if you set `TRAVELPI_RESTART_COMMAND`
+  or run the packaged service names.
+
+The display process hot-reloads valid manifest changes automatically. Asset prep
+still matters because the renderer expects Pi-friendly runtime images in
+`assets/photos/` plus QOI siblings when `qoiconv` is available.
+
 ### High-Resolution Map Tiles
 
 The tracked `assets/source/maps/world_map.png` is a modest 4096x2048 source map.
@@ -185,6 +222,7 @@ Install raylib locally, then:
 ```sh
 make
 make run
+make admin
 ```
 
 `make run` starts windowed with FPS visible for development. Add `--profile` to
@@ -206,6 +244,7 @@ The raylib build script compiles raylib for `PLATFORM_DRM` with OpenGL ES 2.0.
 The kiosk executable links against that install.
 
 The default runtime and systemd service are set to `1920x1080`.
+The admin service listens on port `8080` by default.
 
 ## License
 
@@ -219,10 +258,13 @@ separate permission from the copyright holder.
 sudo mkdir -p /opt/travelpi/bin
 sudo cp build/travelpi /opt/travelpi/bin/
 sudo cp -R assets /opt/travelpi/
+sudo cp -R admin config scripts /opt/travelpi/
 sudo cp systemd/travelpi.service /etc/systemd/system/
+sudo cp systemd/travelpi-admin.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable travelpi.service
+sudo systemctl enable travelpi.service travelpi-admin.service
 sudo systemctl start travelpi.service
+sudo systemctl start travelpi-admin.service
 ```
 
 Make sure the service user belongs to the `video` and `render` groups so it can
@@ -230,14 +272,17 @@ open DRM/KMS devices.
 
 ## Configure Trips
 
-Edit `config/trips.json`, then regenerate `src/travel_config.c`.
+Use the admin UI or edit `config/trips.json` directly. The renderer watches the
+JSON file and reloads valid changes while it is running. `src/travel_config.c`
+is still generated for fallback builds and compatibility with older workflows.
 
 - `geo` is the destination latitude/longitude. It is projected onto the world
   texture with a simple equirectangular transform.
 - `pixel_nudge` is an art-direction offset in final map pixels for maps whose
   labels or visual geography need slight alignment correction.
-- `caption` is the compact lower-right trip label used during the foreground
-  collage beat.
+- `caption` is kept for manifest compatibility; the current lower bar uses the
+  trip name/date on the left and only shows a right-side `page N/M` label for
+  multi-page trips.
 - `close_zoom` controls how far into the region the camera travels.
 - `hold_seconds`, `fade_seconds`, `zoom_in_seconds`, and `zoom_out_seconds`
   control the cinematic beat.

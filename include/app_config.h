@@ -5,6 +5,9 @@
 #define TRAVELPI_DEFAULT_SCREEN_WIDTH 1920
 #define TRAVELPI_DEFAULT_SCREEN_HEIGHT 1080
 
+#define TRAVELPI_TRIPS_CONFIG_PATH "config/trips.json"
+#define TRAVELPI_BANNER_FONT_PATH "assets/fonts/LibreBaskerville.ttf"
+#define TRAVELPI_BANNER_FONT_BASE_SIZE 96
 #define TRAVELPI_MAP_PATH "assets/maps/world_map.qoi"
 #define TRAVELPI_MAP_FALLBACK_PATH "assets/maps/world_map.png"
 #define TRAVELPI_MAP_TILE_METADATA_PATH "assets/maps/tiles/tiles.txt"

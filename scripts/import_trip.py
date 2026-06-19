@@ -344,7 +344,7 @@ def main():
     parser.add_argument("--lat", type=float, help="Latitude override when photos have no GPS.")
     parser.add_argument("--lon", type=float, help="Longitude override when photos have no GPS.")
     parser.add_argument("--max-photos", type=int, help="Optional cap. Defaults to every readable still image.")
-    parser.add_argument("--close-zoom", type=float, default=3.0)
+    parser.add_argument("--close-zoom", type=float, default=10.0)
     parser.add_argument("--hold-seconds", type=float, default=15.0)
     parser.add_argument("--fade-seconds", type=float, default=0.45)
     parser.add_argument("--quality", type=int, default=92)

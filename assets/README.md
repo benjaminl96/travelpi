@@ -7,6 +7,8 @@ Expected layout:
 
 ```text
 assets/
+  fonts/
+    LibreBaskerville.ttf
   maps/
     world_map.qoi
     world_map.png
@@ -31,8 +33,10 @@ Memory notes:
 - The included `world_map.png` was prepared from Natural Earth II with Shaded
   Relief, public-domain raster data. The runtime prefers `world_map.qoi` for
   faster decode and falls back to `world_map.png`.
+- The lower banner uses bundled Libre Baskerville under the SIL Open Font
+  License; see `assets/fonts/LibreBaskerville-OFL.txt`.
 - A 4096x2048 RGBA map consumes about 32 MiB of GPU memory after upload.
 - Photos should be prepared before upload. The helper currently uses a default
   minimum 1280px long edge so large non-overlapping gallery cells stay sharp.
 - A trip can contain any number of photos. The runtime renders them as pages of
-  up to four photos, keeping only the current and next page's textures resident.
+  up to six photos, keeping only the current and next page's textures resident.

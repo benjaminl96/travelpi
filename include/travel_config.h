@@ -1,6 +1,7 @@
 #ifndef TRAVELPI_TRAVEL_CONFIG_H
 #define TRAVELPI_TRAVEL_CONFIG_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include "raylib.h"
 #include "app_config.h"
@@ -35,5 +36,13 @@ typedef struct TravelLocation {
 
 extern const TravelLocation TRAVELPI_LOCATIONS[];
 extern const size_t TRAVELPI_LOCATION_COUNT;
+
+typedef struct RuntimeTravelConfig {
+    TravelLocation *locations;
+    size_t location_count;
+} RuntimeTravelConfig;
+
+bool LoadRuntimeTravelConfig(const char *path, RuntimeTravelConfig *config);
+void UnloadRuntimeTravelConfig(RuntimeTravelConfig *config);
 
 #endif

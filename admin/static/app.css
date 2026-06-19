@@ -1,0 +1,271 @@
+:root {
+  color-scheme: dark;
+  --bg: #171713;
+  --panel: #24231d;
+  --panel-2: #302d23;
+  --ink: #eee3c5;
+  --muted: #b8aa86;
+  --line: #494332;
+  --accent: #d77845;
+  --green: #7fa476;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+button, input {
+  font: inherit;
+}
+
+button {
+  border: 1px solid var(--line);
+  background: #2a281f;
+  color: var(--ink);
+  padding: 10px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+button:hover { border-color: var(--accent); }
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #1c130e;
+  font-weight: 700;
+}
+
+.shell {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  min-height: 100vh;
+}
+
+.rail {
+  border-right: 1px solid var(--line);
+  background: #1d1c17;
+  padding: 20px;
+}
+
+.brand {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 18px;
+}
+
+.brand span {
+  font-size: 26px;
+  font-weight: 800;
+}
+
+.brand small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.trip-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.trip-item {
+  text-align: left;
+  display: grid;
+  gap: 3px;
+}
+
+.trip-item.active {
+  border-color: var(--accent);
+  background: #3a2c22;
+}
+
+.trip-item small { color: var(--muted); }
+
+.workspace {
+  padding: 20px;
+  min-width: 0;
+}
+
+.tabs {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.tab.active {
+  border-color: var(--green);
+  color: #d8f0d2;
+}
+
+.panel {
+  display: none;
+}
+
+.panel.active {
+  display: block;
+}
+
+.grid-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+  gap: 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #171713;
+  color: var(--ink);
+  padding: 10px;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin: 14px 0;
+  flex-wrap: wrap;
+}
+
+.dropzone {
+  position: relative;
+  display: grid;
+  gap: 5px;
+  place-items: center;
+  min-height: 130px;
+  border: 1px dashed #70664d;
+  border-radius: 8px;
+  background: #211f18;
+  color: var(--muted);
+  margin: 16px 0;
+}
+
+.dropzone.drag {
+  border-color: var(--accent);
+  background: #2c241c;
+}
+
+.dropzone input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.dropzone strong {
+  color: var(--ink);
+  font-size: 18px;
+}
+
+.photo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.photo-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.photo-card img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  background: #111;
+}
+
+.photo-card .meta {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.photo-card .row {
+  display: flex;
+  gap: 6px;
+}
+
+.photo-card button {
+  padding: 6px 8px;
+}
+
+.jobs {
+  display: grid;
+  gap: 12px;
+}
+
+.job {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.job header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+}
+
+.job pre {
+  max-height: 260px;
+  overflow: auto;
+  background: #12120f;
+  border-radius: 6px;
+  padding: 10px;
+  color: #d7cfb6;
+  white-space: pre-wrap;
+}
+
+.toast {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  max-width: 420px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: #0f1510;
+  border: 1px solid var(--green);
+  color: var(--ink);
+  opacity: 0;
+  transform: translateY(12px);
+  transition: opacity .18s ease, transform .18s ease;
+}
+
+.toast.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (max-width: 900px) {
+  .shell { grid-template-columns: 1fr; }
+  .rail { border-right: 0; border-bottom: 1px solid var(--line); }
+  .grid-form { grid-template-columns: 1fr; }
+}

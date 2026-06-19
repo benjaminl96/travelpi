@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <time.h>
 
 #include "raylib.h"
 #include "app_config.h"
@@ -90,6 +92,8 @@ typedef struct FrameProfiler {
 typedef struct TravelRuntime {
     TextureSlot map;
     TextureSlot paper;
+    Font banner_font;
+    bool banner_font_loaded;
     MapTileCache tiles;
     PhotoBank current_bank;
     PhotoBank preload_bank;
@@ -104,6 +108,20 @@ typedef struct TravelRuntime {
     float clock;
     FrameProfiler profiler;
 } TravelRuntime;
+
+static const TravelLocation *g_locations = NULL;
+static size_t g_location_count = 0;
+
+static time_t FileModifiedTime(const char *path)
+{
+    struct stat status;
+
+    if (stat(path, &status) != 0) {
+        return 0;
+    }
+
+    return status.st_mtime;
+}
 
 static float Clamp01(float value)
 {
@@ -177,6 +195,40 @@ static unsigned int HashU32(unsigned int value)
 
 static Texture2D UploadCheckedTexture(int width, int height, Color a, Color b);
 static void UnloadTextureSlot(TextureSlot *slot);
+
+static bool LoadBannerFont(Font *font)
+{
+    if (!FileExists(TRAVELPI_BANNER_FONT_PATH)) {
+        return false;
+    }
+
+    *font = LoadFontEx(TRAVELPI_BANNER_FONT_PATH, TRAVELPI_BANNER_FONT_BASE_SIZE, NULL, 0);
+
+    if (font->texture.id == 0) {
+        return false;
+    }
+
+    SetTextureFilter(font->texture, TEXTURE_FILTER_BILINEAR);
+    return true;
+}
+
+static Vector2 MeasureBannerText(const TravelRuntime *runtime, const char *text, float size)
+{
+    if (runtime->banner_font_loaded) {
+        return MeasureTextEx(runtime->banner_font, text, size, 0.0f);
+    }
+
+    return (Vector2) { (float)MeasureText(text, (int)size), size };
+}
+
+static void DrawBannerText(const TravelRuntime *runtime, const char *text, Vector2 position, float size, Color color)
+{
+    if (runtime->banner_font_loaded) {
+        DrawTextEx(runtime->banner_font, text, position, size, 0.0f, color);
+    } else {
+        DrawText(text, (int)position.x, (int)position.y, (int)size, color);
+    }
+}
 
 static int PhotoGridColumnCount(int count)
 {
@@ -558,7 +610,7 @@ static void UnloadPhotoBank(PhotoBank *bank)
 
 static const TravelLocation *CurrentLocation(const TravelRuntime *runtime)
 {
-    return &TRAVELPI_LOCATIONS[runtime->location_index % TRAVELPI_LOCATION_COUNT];
+    return &g_locations[runtime->location_index % g_location_count];
 }
 
 static size_t FindLocationIndex(const char *name)
@@ -567,8 +619,8 @@ static size_t FindLocationIndex(const char *name)
         return 0;
     }
 
-    for (size_t i = 0; i < TRAVELPI_LOCATION_COUNT; ++i) {
-        if (strcmp(TRAVELPI_LOCATIONS[i].name, name) == 0) {
+    for (size_t i = 0; i < g_location_count; ++i) {
+        if (strcmp(g_locations[i].name, name) == 0) {
             return i;
         }
     }
@@ -624,9 +676,9 @@ static int PhotoCountForPage(const TravelLocation *location, int page_index)
 
 static void LoadPhotoBankBlocking(PhotoBank *bank, size_t location_index, int page_index)
 {
-    const TravelLocation *location = &TRAVELPI_LOCATIONS[location_index % TRAVELPI_LOCATION_COUNT];
+    const TravelLocation *location = &g_locations[location_index % g_location_count];
     UnloadPhotoBank(bank);
-    bank->location_index = location_index % TRAVELPI_LOCATION_COUNT;
+    bank->location_index = location_index % g_location_count;
     bank->page_index = page_index;
     bank->target_count = PhotoCountForPage(location, page_index);
 
@@ -642,14 +694,14 @@ static void LoadPhotoBankBlocking(PhotoBank *bank, size_t location_index, int pa
 static bool IsPhotoBankComplete(const PhotoBank *bank, size_t location_index, int page_index)
 {
     return bank->valid &&
-        (bank->location_index == (location_index % TRAVELPI_LOCATION_COUNT)) &&
+        (bank->location_index == (location_index % g_location_count)) &&
         (bank->page_index == page_index) &&
         (bank->cursor >= bank->target_count);
 }
 
 static void StartPhotoPreload(PhotoBank *bank, size_t location_index, int page_index)
 {
-    location_index %= TRAVELPI_LOCATION_COUNT;
+    location_index %= g_location_count;
 
     if (bank->valid && (bank->location_index == location_index) && (bank->page_index == page_index)) {
         return;
@@ -658,7 +710,7 @@ static void StartPhotoPreload(PhotoBank *bank, size_t location_index, int page_i
     UnloadPhotoBank(bank);
     bank->location_index = location_index;
     bank->page_index = page_index;
-    bank->target_count = PhotoCountForPage(&TRAVELPI_LOCATIONS[location_index], page_index);
+    bank->target_count = PhotoCountForPage(&g_locations[location_index], page_index);
     bank->cursor = 0;
     bank->valid = true;
 }
@@ -669,7 +721,7 @@ static void ContinuePhotoPreload(PhotoBank *bank)
         return;
     }
 
-    const TravelLocation *location = &TRAVELPI_LOCATIONS[bank->location_index];
+    const TravelLocation *location = &g_locations[bank->location_index];
     const int cursor = bank->cursor;
 
     if (cursor < TRAVELPI_MAX_PHOTOS_PER_LOCATION) {
@@ -689,7 +741,7 @@ static void NextPageOrLocation(const TravelRuntime *runtime, size_t *location_in
         *location_index = runtime->location_index;
         *page_index = runtime->page_index + 1;
     } else {
-        *location_index = (runtime->location_index + 1) % TRAVELPI_LOCATION_COUNT;
+        *location_index = (runtime->location_index + 1) % g_location_count;
         *page_index = 0;
     }
 }
@@ -705,7 +757,7 @@ static void PreloadNextPagePhotos(TravelRuntime *runtime)
 
 static void BeginPage(TravelRuntime *runtime, size_t location_index, int page_index)
 {
-    location_index %= TRAVELPI_LOCATION_COUNT;
+    location_index %= g_location_count;
     runtime->location_index = location_index;
     runtime->page_index = page_index;
     runtime->phase = TRIP_ZOOM_IN;
@@ -725,6 +777,27 @@ static void BeginPage(TravelRuntime *runtime, size_t location_index, int page_in
 static void BeginLocation(TravelRuntime *runtime, size_t location_index)
 {
     BeginPage(runtime, location_index, 0);
+}
+
+static bool ReloadRuntimeTrips(TravelRuntime *runtime, RuntimeTravelConfig *active_config, const char *start_name)
+{
+    RuntimeTravelConfig next_config = { 0 };
+
+    if (!LoadRuntimeTravelConfig(TRAVELPI_TRIPS_CONFIG_PATH, &next_config) || next_config.location_count == 0) {
+        UnloadRuntimeTravelConfig(&next_config);
+        fprintf(stderr, "travelpi: ignored invalid trip config reload\n");
+        return false;
+    }
+
+    UnloadPhotoBank(&runtime->current_bank);
+    UnloadPhotoBank(&runtime->preload_bank);
+    UnloadRuntimeTravelConfig(active_config);
+    *active_config = next_config;
+    g_locations = active_config->locations;
+    g_location_count = active_config->location_count;
+    BeginLocation(runtime, FindLocationIndex(start_name));
+    fprintf(stderr, "travelpi: reloaded trips from %s\n", TRAVELPI_TRIPS_CONFIG_PATH);
+    return true;
 }
 
 static void ResetPhase(TravelRuntime *runtime, TripPhase next_phase)
@@ -915,8 +988,8 @@ static void DrawMap(TravelRuntime *runtime, int screen_width, int screen_height)
     const bool photos_visible = (runtime->photo_alpha > 0.001f) &&
         (runtime->phase != TRIP_ZOOM_OUT);
 
-    for (size_t i = 0; i < TRAVELPI_LOCATION_COUNT; ++i) {
-        const TravelLocation *location = &TRAVELPI_LOCATIONS[i];
+    for (size_t i = 0; i < g_location_count; ++i) {
+        const TravelLocation *location = &g_locations[i];
         const Vector2 map_pixel = ProjectGeoToMap(location, runtime->map.texture);
         const Vector2 screen_pixel = GetWorldToScreen2D(map_pixel, camera);
         const bool current = (i == runtime->location_index);
@@ -1047,7 +1120,7 @@ static void DrawOverlay(const TravelRuntime *runtime, int screen_width, int scre
     const int has_date = (location->date_label != NULL) && (location->date_label[0] != '\0');
 
     if (runtime->phase != TRIP_ZOOM_IN) {
-        const int caption_width = MeasureText(caption, caption_size);
+        const int caption_width = (int)MeasureBannerText(runtime, caption, (float)caption_size).x;
         const int caption_x = screen_width - right_padding - caption_width;
         const int caption_y = band_y + (int)((band_height - (float)caption_size)*0.52f);
         const Rectangle band = { 0.0f, (float)band_y, (float)screen_width, band_height + 2.0f };
@@ -1059,14 +1132,19 @@ static void DrawOverlay(const TravelRuntime *runtime, int screen_width, int scre
         DrawPaperTexture(runtime, band, 0.66f);
         DrawRectangleGradientV(0, band_y, screen_width, 18, (Color) { 83, 59, 31, 90 }, (Color) { 0, 0, 0, 0 });
         DrawLine(0, band_y, screen_width, band_y, Fade((Color) { 68, 48, 27, 255 }, 0.62f));
-        DrawText(location->name, x, y, title_size, ink);
+        DrawBannerText(runtime, location->name, (Vector2) { (float)x, (float)y }, (float)title_size, ink);
 
         if (has_date) {
-            DrawText(location->date_label, x, y + title_size + 4, date_size, Fade(muted_ink, 0.92f));
+            DrawBannerText(
+                runtime,
+                location->date_label,
+                (Vector2) { (float)x, (float)y + (float)title_size + 10.0f },
+                (float)date_size,
+                Fade(muted_ink, 0.92f));
         }
 
         if (caption[0] != '\0') {
-            DrawText(caption, caption_x, caption_y, caption_size, Fade(ink, 0.88f));
+            DrawBannerText(runtime, caption, (Vector2) { (float)caption_x, (float)caption_y }, (float)caption_size, Fade(ink, 0.88f));
         }
     }
 
@@ -1108,6 +1186,7 @@ static void ParseArgs(AppOptions *options, int argc, char **argv)
 
 int main(int argc, char **argv)
 {
+    RuntimeTravelConfig runtime_config = { 0 };
     AppOptions options = {
         .width = TRAVELPI_DEFAULT_SCREEN_WIDTH,
         .height = TRAVELPI_DEFAULT_SCREEN_HEIGHT,
@@ -1120,6 +1199,23 @@ int main(int argc, char **argv)
         .screenshot_path = "travelpi_screenshot.png",
     };
     ParseArgs(&options, argc, argv);
+
+    g_locations = TRAVELPI_LOCATIONS;
+    g_location_count = TRAVELPI_LOCATION_COUNT;
+
+    if (LoadRuntimeTravelConfig(TRAVELPI_TRIPS_CONFIG_PATH, &runtime_config)) {
+        g_locations = runtime_config.locations;
+        g_location_count = runtime_config.location_count;
+        fprintf(stderr, "travelpi: loaded trips from %s\n", TRAVELPI_TRIPS_CONFIG_PATH);
+    } else {
+        fprintf(stderr, "travelpi: using generated trip config fallback\n");
+    }
+
+    if (g_locations == NULL || g_location_count == 0) {
+        fprintf(stderr, "travelpi: no trips configured\n");
+        UnloadRuntimeTravelConfig(&runtime_config);
+        return 1;
+    }
 
     SetTraceLogLevel(LOG_WARNING);
     SetConfigFlags(FLAG_VSYNC_HINT);
@@ -1137,11 +1233,16 @@ int main(int argc, char **argv)
     TravelRuntime runtime = { 0 };
     ResetPhotoBank(&runtime.current_bank);
     ResetPhotoBank(&runtime.preload_bank);
+    runtime.banner_font_loaded = LoadBannerFont(&runtime.banner_font);
+    if (!runtime.banner_font_loaded) {
+        fprintf(stderr, "travelpi: banner font not found, using default font\n");
+    }
     runtime.map = LoadMapTexture();
 
     if (!runtime.map.loaded) {
         CloseWindow();
         fprintf(stderr, "travelpi: failed to create map texture\n");
+        UnloadRuntimeTravelConfig(&runtime_config);
         return 1;
     }
 
@@ -1156,6 +1257,8 @@ int main(int argc, char **argv)
     BeginLocation(&runtime, FindLocationIndex(options.start_name));
     bool screenshot_taken = false;
     float app_time = 0.0f;
+    float config_check_time = 0.0f;
+    time_t config_mtime = FileModifiedTime(TRAVELPI_TRIPS_CONFIG_PATH);
 
     while (!WindowShouldClose()) {
         const double frame_start = GetTime();
@@ -1164,6 +1267,18 @@ int main(int argc, char **argv)
         if (dt <= 0.0f) dt = 1.0f/(float)TRAVELPI_TARGET_FPS;
         if (dt > 0.050f) dt = 0.050f;
         app_time += dt;
+        config_check_time += dt;
+
+        if (config_check_time >= 2.0f) {
+            const time_t next_mtime = FileModifiedTime(TRAVELPI_TRIPS_CONFIG_PATH);
+            config_check_time = 0.0f;
+
+            if (next_mtime != config_mtime) {
+                if (ReloadRuntimeTrips(&runtime, &runtime_config, options.start_name)) {
+                    config_mtime = next_mtime;
+                }
+            }
+        }
 
         UpdatePhase(&runtime, dt);
         UpdateSmoothCamera(&runtime, dt);
@@ -1206,8 +1321,12 @@ int main(int argc, char **argv)
     UnloadPhotoBank(&runtime.current_bank);
     UnloadPhotoBank(&runtime.preload_bank);
     UnloadMapTileCache(&runtime.tiles);
+    if (runtime.banner_font_loaded) {
+        UnloadFont(runtime.banner_font);
+    }
     UnloadTextureSlot(&runtime.paper);
     UnloadTextureSlot(&runtime.map);
     CloseWindow();
+    UnloadRuntimeTravelConfig(&runtime_config);
     return 0;
 }

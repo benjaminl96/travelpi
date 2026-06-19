@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>travelpi admin</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <main class="shell">
+    <aside class="rail">
+      <div class="brand">
+        <span>travelpi</span>
+        <small id="manifestPath"></small>
+      </div>
+      <button class="primary" id="newTrip">New trip</button>
+      <div class="trip-list" id="tripList"></div>
+    </aside>
+
+    <section class="workspace">
+      <nav class="tabs">
+        <button class="tab active" data-tab="edit">Trip</button>
+        <button class="tab" data-tab="import">Import</button>
+        <button class="tab" data-tab="jobs">Jobs</button>
+        <button id="preparePhotos">Prepare photos</button>
+        <button id="prepareAll">Prepare all</button>
+        <button id="restartDisplay">Restart display</button>
+      </nav>
+
+      <section class="panel active" id="editPanel">
+        <form id="tripForm" class="grid-form">
+          <label>Name<input name="name" required></label>
+          <label>Caption<input name="caption"></label>
+          <label>Latitude<input name="latitude" type="number" step="0.000001" required></label>
+          <label>Longitude<input name="longitude" type="number" step="0.000001" required></label>
+          <label>Start date<input name="start_date" type="date"></label>
+          <label>End date<input name="end_date" type="date"></label>
+          <label>Close zoom<input name="close_zoom" type="number" step="0.1"></label>
+          <label>Hold seconds<input name="hold_seconds" type="number" step="0.1"></label>
+          <label>Fade seconds<input name="fade_seconds" type="number" step="0.05"></label>
+          <label>Zoom in seconds<input name="zoom_in_seconds" type="number" step="0.05"></label>
+          <label>Zoom out seconds<input name="zoom_out_seconds" type="number" step="0.05"></label>
+          <label>Date label<input name="date_label"></label>
+        </form>
+
+        <div class="actions">
+          <button class="primary" id="saveTrip">Save trip</button>
+          <button id="deleteTrip">Delete trip</button>
+        </div>
+
+        <div class="dropzone" id="photoDrop">
+          <input id="photoUpload" type="file" accept="image/*,.heic,.heif" multiple>
+          <strong>Upload photos to selected trip</strong>
+          <span>Drop images here or choose files.</span>
+        </div>
+
+        <div class="photo-grid" id="photoGrid"></div>
+      </section>
+
+      <section class="panel" id="importPanel">
+        <form id="importForm" class="grid-form">
+          <label>Name<input name="name" required></label>
+          <label>Caption<input name="caption"></label>
+          <label>Latitude<input name="lat" type="number" step="0.000001" placeholder="optional if photos have GPS"></label>
+          <label>Longitude<input name="lon" type="number" step="0.000001" placeholder="optional if photos have GPS"></label>
+          <label>Close zoom<input name="close_zoom" type="number" step="0.1" value="10"></label>
+          <label>Hold seconds<input name="hold_seconds" type="number" step="0.1" value="15"></label>
+          <label>Fade seconds<input name="fade_seconds" type="number" step="0.05" value="0.45"></label>
+          <label>Slug<input name="slug" placeholder="optional filename prefix"></label>
+        </form>
+        <div class="dropzone" id="importDrop">
+          <input id="importUpload" type="file" accept="image/*,.heic,.heif" multiple>
+          <strong>Create trip from photos</strong>
+          <span>EXIF GPS/date will be used when present.</span>
+        </div>
+        <div class="actions">
+          <button class="primary" id="importTrip">Import trip</button>
+        </div>
+      </section>
+
+      <section class="panel" id="jobsPanel">
+        <div class="jobs" id="jobs"></div>
+      </section>
+    </section>
+  </main>
+
+  <div class="toast" id="toast"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

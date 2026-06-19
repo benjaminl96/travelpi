@@ -1,0 +1,19 @@
+[Unit]
+Description=travelpi local admin web UI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/opt/travelpi
+Environment=TRAVELPI_ADMIN_HOST=0.0.0.0
+Environment=TRAVELPI_ADMIN_PORT=8080
+ExecStart=/usr/bin/python3 /opt/travelpi/admin/travelpi_admin.py
+Restart=always
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -6,7 +6,7 @@ INC_DIR := include
 TRAVEL_CONFIG_MANIFEST := $(if $(wildcard config/trips.json),config/trips.json,config/trips.example.json)
 GENERATED_CONFIG := $(SRC_DIR)/travel_config.c
 
-SRC := $(SRC_DIR)/main.c $(GENERATED_CONFIG)
+SRC := $(SRC_DIR)/main.c $(SRC_DIR)/travel_config_loader.c $(GENERATED_CONFIG)
 OBJ := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SRC))
 DEP := $(OBJ:.o=.d)
 
@@ -56,7 +56,7 @@ endif
 CPPFLAGS += $(RAYLIB_CFLAGS)
 LDLIBS += $(RAYLIB_LIBS)
 
-.PHONY: all clean run debug pi print-flags
+.PHONY: all clean run admin debug pi print-flags
 
 all: $(BUILD_DIR)/$(TARGET)
 
@@ -68,6 +68,9 @@ pi:
 
 run: $(BUILD_DIR)/$(TARGET)
 	./$(BUILD_DIR)/$(TARGET) --windowed --show-fps
+
+admin:
+	python3 admin/travelpi_admin.py --host 0.0.0.0 --port 8080
 
 print-flags:
 	@printf 'CPPFLAGS=%s\nCFLAGS=%s\nLDFLAGS=%s\nLDLIBS=%s\n' "$(CPPFLAGS)" "$(CFLAGS)" "$(LDFLAGS)" "$(LDLIBS)"
