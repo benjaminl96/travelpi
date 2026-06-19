@@ -1,0 +1,96 @@
+{
+  "trips": [
+    {
+      "name": "Example Gulf Weekend",
+      "caption": "Example Gulf Weekend",
+      "geo": {
+        "latitude": 30.3935,
+        "longitude": -86.4958
+      },
+      "pixel_nudge": [0.0, 0.0],
+      "close_zoom": 3.0,
+      "zoom_in_seconds": 2.35,
+      "hold_seconds": 15.0,
+      "fade_seconds": 0.45,
+      "zoom_out_seconds": 2.05,
+      "start_date": "2026-06-01",
+      "end_date": "2026-06-02",
+      "photos": [
+        {
+          "path": "assets/photos/example_gulf_01.jpg",
+          "anchor": [0.42, 0.31],
+          "scale": 0.20,
+          "rotation": -7.0,
+          "drift": 0.4
+        },
+        {
+          "path": "assets/photos/example_gulf_02.jpg",
+          "anchor": [0.56, 0.28],
+          "scale": 0.19,
+          "rotation": 6.0,
+          "drift": 1.5
+        },
+        {
+          "path": "assets/photos/example_gulf_03.jpg",
+          "anchor": [0.50, 0.53],
+          "scale": 0.21,
+          "rotation": -2.0,
+          "drift": 2.6
+        },
+        {
+          "path": "assets/photos/example_gulf_04.jpg",
+          "anchor": [0.61, 0.52],
+          "scale": 0.18,
+          "rotation": 4.0,
+          "drift": 3.2
+        }
+      ]
+    },
+    {
+      "name": "Example International Stop",
+      "caption": "Example International Stop",
+      "geo": {
+        "latitude": 48.8566,
+        "longitude": 2.3522
+      },
+      "pixel_nudge": [0.0, 0.0],
+      "close_zoom": 3.0,
+      "zoom_in_seconds": 2.35,
+      "hold_seconds": 15.0,
+      "fade_seconds": 0.45,
+      "zoom_out_seconds": 2.05,
+      "start_date": "2026-07-15",
+      "end_date": "2026-07-16",
+      "photos": [
+        {
+          "path": "assets/photos/example_international_01.jpg",
+          "anchor": [0.42, 0.31],
+          "scale": 0.20,
+          "rotation": -7.0,
+          "drift": 0.4
+        },
+        {
+          "path": "assets/photos/example_international_02.jpg",
+          "anchor": [0.56, 0.28],
+          "scale": 0.19,
+          "rotation": 6.0,
+          "drift": 1.5
+        },
+        {
+          "path": "assets/photos/example_international_03.jpg",
+          "anchor": [0.50, 0.53],
+          "scale": 0.21,
+          "rotation": -2.0,
+          "drift": 2.6
+        },
+        {
+          "path": "assets/photos/example_international_04.jpg",
+          "anchor": [0.61, 0.52],
+          "scale": 0.18,
+          "rotation": 4.0,
+          "drift": 3.2
+        }
+      ]
+    }
+  ]
+}

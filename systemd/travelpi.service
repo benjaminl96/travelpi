@@ -1,0 +1,24 @@
+[Unit]
+Description=travelpi DRM/KMS kiosk
+After=multi-user.target systemd-user-sessions.service
+Conflicts=getty@tty1.service
+
+[Service]
+Type=simple
+User=pi
+SupplementaryGroups=video render
+WorkingDirectory=/opt/travelpi
+Environment=TRAVELPI_ASSET_ROOT=/opt/travelpi
+Environment=MESA_GL_VERSION_OVERRIDE=2.0
+ExecStart=/opt/travelpi/bin/travelpi --fullscreen --width 1920 --height 1080
+Restart=always
+RestartSec=2
+StandardInput=tty
+StandardOutput=journal
+StandardError=journal
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+
+[Install]
+WantedBy=multi-user.target

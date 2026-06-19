@@ -1,0 +1,28 @@
+# Build output
+build/
+travelpi
+*.o
+*.a
+*.so
+*.d
+*.dSYM/
+
+# Local caches
+.asset-cache/
+__pycache__/
+*.pyc
+.DS_Store
+assets/source/maps/NATURAL_EARTH_II_README.html
+
+# Personal trip data and generated config
+config/trips.json
+src/travel_config.c
+
+# Personal photo libraries. Keep directory placeholders tracked.
+assets/photos/*
+!assets/photos/.gitkeep
+assets/source/photos/*
+!assets/source/photos/.gitkeep
+
+# Optional local drop zone for scp/import workflows
+incoming/

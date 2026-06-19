@@ -1,0 +1,185 @@
+#!/usr/bin/env python3
+import argparse
+import json
+from datetime import date
+from pathlib import Path
+
+
+DEFAULTS = {
+    "pixel_nudge": [0.0, 0.0],
+    "close_zoom": 3.0,
+    "zoom_in_seconds": 2.35,
+    "hold_seconds": 15.0,
+    "fade_seconds": 0.45,
+    "zoom_out_seconds": 2.05,
+}
+
+DEFAULT_PHOTO_LAYOUT = [
+    {"anchor": [0.42, 0.31], "scale": 0.20, "rotation": -7.0, "drift": 0.4},
+    {"anchor": [0.56, 0.28], "scale": 0.19, "rotation": 6.0, "drift": 1.5},
+    {"anchor": [0.50, 0.53], "scale": 0.21, "rotation": -2.0, "drift": 2.6},
+    {"anchor": [0.61, 0.52], "scale": 0.18, "rotation": 4.0, "drift": 3.2},
+]
+
+
+def repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def c_string(value: str) -> str:
+    return json.dumps(value)
+
+
+def f(value) -> str:
+    return f"{float(value):.4f}f"
+
+
+def pair(values) -> str:
+    return f"{{ {f(values[0])}, {f(values[1])} }}"
+
+
+def format_date(value: str) -> str:
+    parsed = date.fromisoformat(value)
+    return f"{parsed:%b} {parsed.day}, {parsed.year}"
+
+
+def date_label(trip: dict) -> str:
+    explicit = trip.get("date_label")
+
+    if explicit:
+        return explicit
+
+    start = trip.get("start_date")
+    end = trip.get("end_date")
+
+    if start and end and start != end:
+        start_date = date.fromisoformat(start)
+        end_date = date.fromisoformat(end)
+
+        if start_date.year == end_date.year and start_date.month == end_date.month:
+            return f"{start_date:%b} {start_date.day}-{end_date.day}, {start_date.year}"
+
+        if start_date.year == end_date.year:
+            return f"{start_date:%b} {start_date.day} - {end_date:%b} {end_date.day}, {start_date.year}"
+
+        return f"{format_date(start)} - {format_date(end)}"
+
+    if start:
+        return format_date(start)
+
+    return ""
+
+
+def photo_with_defaults(photo: dict, index: int) -> dict:
+    merged = dict(DEFAULT_PHOTO_LAYOUT[index % len(DEFAULT_PHOTO_LAYOUT)])
+    merged.update(photo)
+    return merged
+
+
+def validate_trip(trip: dict):
+    if "name" not in trip:
+        raise ValueError("trip missing name")
+    if "geo" not in trip or "latitude" not in trip["geo"] or "longitude" not in trip["geo"]:
+        raise ValueError(f"{trip['name']}: missing geo.latitude/geo.longitude")
+
+
+def symbol_name(value: str) -> str:
+    name = "".join(ch.lower() if ch.isalnum() else "_" for ch in value)
+    name = "_".join(part for part in name.split("_") if part)
+    return name or "trip"
+
+
+def emit_photo_array(trip: dict, index: int) -> tuple[str, list[str]]:
+    symbol = f"TRAVELPI_PHOTOS_{index}_{symbol_name(trip['name'])}"
+    lines = [f"static const PhotoSpec {symbol}[] = {{"]
+
+    for photo_index, photo in enumerate(trip.get("photos", [])):
+        p = photo_with_defaults(photo, photo_index)
+        lines.append(
+            f"    {{ {c_string(p['path'])}, {pair(p['anchor'])}, "
+            f"{f(p['scale'])}, {f(p['rotation'])}, {f(p['drift'])} }},"
+        )
+
+    lines.append("};")
+    lines.append("")
+    return symbol, lines
+
+
+def emit_trip(trip: dict, photo_symbol: str) -> list[str]:
+    validate_trip(trip)
+    lines = []
+    caption = trip.get("caption", trip["name"])
+    pixel_nudge = trip.get("pixel_nudge", DEFAULTS["pixel_nudge"])
+    photos = trip.get("photos", [])
+
+    lines.append("    {")
+    lines.append(f"        .name = {c_string(trip['name'])},")
+    lines.append(f"        .caption = {c_string(caption)},")
+    lines.append(f"        .date_label = {c_string(date_label(trip))},")
+    lines.append(f"        .geo = {{ {f(trip['geo']['latitude'])}, {f(trip['geo']['longitude'])} }},")
+    lines.append(f"        .pixel_nudge = {pair(pixel_nudge)},")
+    lines.append(f"        .close_zoom = {f(trip.get('close_zoom', DEFAULTS['close_zoom']))},")
+    lines.append(f"        .zoom_in_seconds = {f(trip.get('zoom_in_seconds', DEFAULTS['zoom_in_seconds']))},")
+    lines.append(f"        .hold_seconds = {f(trip.get('hold_seconds', DEFAULTS['hold_seconds']))},")
+    lines.append(f"        .fade_seconds = {f(trip.get('fade_seconds', DEFAULTS['fade_seconds']))},")
+    lines.append(f"        .zoom_out_seconds = {f(trip.get('zoom_out_seconds', DEFAULTS['zoom_out_seconds']))},")
+    lines.append(f"        .photo_count = {len(photos)},")
+    lines.append(f"        .photos = {photo_symbol},")
+    lines.append("    },")
+    return lines
+
+
+def generate(manifest_path: Path, output_path: Path):
+    manifest = json.loads(manifest_path.read_text())
+    trips = manifest.get("trips", [])
+
+    if not trips:
+        raise ValueError("manifest has no trips")
+
+    photo_symbols = []
+    photo_lines = []
+
+    for index, trip in enumerate(trips):
+        symbol, emitted = emit_photo_array(trip, index)
+        photo_symbols.append(symbol)
+        photo_lines.extend(emitted)
+
+    lines = [
+        '#include "travel_config.h"',
+        "",
+        "/* Generated by scripts/generate_travel_config.py from config/trips.json. */",
+        "",
+    ]
+    lines.extend(photo_lines)
+    lines.append("const TravelLocation TRAVELPI_LOCATIONS[] = {")
+
+    for trip, symbol in zip(trips, photo_symbols):
+        lines.extend(emit_trip(trip, symbol))
+
+    lines.extend([
+        "};",
+        "",
+        "const size_t TRAVELPI_LOCATION_COUNT = sizeof(TRAVELPI_LOCATIONS) / sizeof(TRAVELPI_LOCATIONS[0]);",
+        "",
+    ])
+
+    output_path.write_text("\n".join(lines))
+
+
+def main():
+    root = repo_root()
+    default_manifest = root / "config/trips.json"
+
+    if not default_manifest.exists():
+        default_manifest = root / "config/trips.example.json"
+
+    parser = argparse.ArgumentParser(description="Generate src/travel_config.c from config/trips.json.")
+    parser.add_argument("--manifest", default=str(default_manifest))
+    parser.add_argument("--output", default=str(root / "src/travel_config.c"))
+    args = parser.parse_args()
+
+    generate(Path(args.manifest), Path(args.output))
+
+
+if __name__ == "__main__":
+    main()
