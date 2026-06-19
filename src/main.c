@@ -1039,10 +1039,9 @@ static void DrawOverlay(const TravelRuntime *runtime, int screen_width, int scre
     const int band_y = (int)((float)screen_height - band_height);
     const int y = band_y + (int)MaxFloat(band_height*0.13f, 14.0f);
 
+    caption[0] = '\0';
     if (page_count > 1) {
         snprintf(caption, sizeof(caption), "page %d/%d", runtime->page_index + 1, page_count);
-    } else {
-        snprintf(caption, sizeof(caption), "%s", location->caption);
     }
 
     const int has_date = (location->date_label != NULL) && (location->date_label[0] != '\0');
@@ -1064,8 +1063,9 @@ static void DrawOverlay(const TravelRuntime *runtime, int screen_width, int scre
 
         if (has_date) {
             DrawText(location->date_label, x, y + title_size + 4, date_size, Fade(muted_ink, 0.92f));
-            DrawText(caption, caption_x, caption_y, caption_size, Fade(ink, 0.88f));
-        } else {
+        }
+
+        if (caption[0] != '\0') {
             DrawText(caption, caption_x, caption_y, caption_size, Fade(ink, 0.88f));
         }
     }
