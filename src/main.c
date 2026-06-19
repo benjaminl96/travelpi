@@ -59,6 +59,7 @@ typedef struct FrameProfiler {
 
 typedef struct TravelRuntime {
     TextureSlot map;
+    TextureSlot paper;
     PhotoBank current_bank;
     PhotoBank preload_bank;
     size_t location_index;
@@ -109,6 +110,172 @@ static float MaxFloat(float a, float b)
     return (a > b) ? a : b;
 }
 
+static Rectangle InsetRectangle(Rectangle rect, float amount)
+{
+    return (Rectangle) {
+        rect.x + amount,
+        rect.y + amount,
+        MaxFloat(rect.width - amount*2.0f, 1.0f),
+        MaxFloat(rect.height - amount*2.0f, 1.0f),
+    };
+}
+
+static unsigned char ColorByteFromFloat(float value)
+{
+    const int channel = (int)(Clamp01(value)*255.0f + 0.5f);
+    return (unsigned char)channel;
+}
+
+static unsigned char ColorByteFromInt(int value)
+{
+    if (value < 0) return 0;
+    if (value > 255) return 255;
+    return (unsigned char)value;
+}
+
+static unsigned int HashU32(unsigned int value)
+{
+    value ^= value >> 16;
+    value *= 0x7feb352du;
+    value ^= value >> 15;
+    value *= 0x846ca68bu;
+    value ^= value >> 16;
+    return value;
+}
+
+static Texture2D UploadCheckedTexture(int width, int height, Color a, Color b);
+
+static int PhotoGridColumnCount(int count)
+{
+    if (count <= 1) return 1;
+    if (count <= 3) return count;
+    if (count == 4) return 2;
+    return 3;
+}
+
+static void BuildPhotoGrid(Rectangle *cells, int count, Rectangle area, float gap)
+{
+    const int columns = PhotoGridColumnCount(count);
+    const int rows = (count + columns - 1)/columns;
+    const float cell_width = (area.width - gap*(float)(columns - 1))/(float)columns;
+    const float cell_height = (area.height - gap*(float)(rows - 1))/(float)rows;
+    int cursor = 0;
+
+    for (int row = 0; row < rows; ++row) {
+        const int remaining = count - cursor;
+        const int row_count = (remaining < columns) ? remaining : columns;
+        const float row_width = cell_width*(float)row_count + gap*(float)(row_count - 1);
+        const float row_left = area.x + (area.width - row_width)*0.5f;
+
+        for (int column = 0; column < row_count; ++column) {
+            cells[cursor++] = (Rectangle) {
+                row_left + (cell_width + gap)*(float)column,
+                area.y + (cell_height + gap)*(float)row,
+                cell_width,
+                cell_height,
+            };
+        }
+    }
+}
+
+static void ApplyPaperMapGrade(Image *image)
+{
+    ImageFormat(image, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+    Color *pixels = (Color *)image->data;
+    const int pixel_count = image->width*image->height;
+
+    if (pixels == NULL) {
+        return;
+    }
+
+    for (int i = 0; i < pixel_count; ++i) {
+        const Color source = pixels[i];
+        float r = (float)source.r/255.0f;
+        float g = (float)source.g/255.0f;
+        float b = (float)source.b/255.0f;
+        const float luminance = r*0.299f + g*0.587f + b*0.114f;
+        const float desaturate = 0.50f;
+        const float paper_mix = 0.12f;
+
+        r = LerpFloat(r, luminance, desaturate);
+        g = LerpFloat(g, luminance, desaturate);
+        b = LerpFloat(b, luminance, desaturate);
+
+        r = (r - 0.5f)*0.86f + 0.5f;
+        g = (g - 0.5f)*0.86f + 0.5f;
+        b = (b - 0.5f)*0.86f + 0.5f;
+
+        r = LerpFloat(r, 0.90f, paper_mix)*1.05f;
+        g = LerpFloat(g, 0.84f, paper_mix)*1.00f;
+        b = LerpFloat(b, 0.68f, paper_mix)*0.88f;
+
+        pixels[i] = (Color) {
+            ColorByteFromFloat(r),
+            ColorByteFromFloat(g),
+            ColorByteFromFloat(b),
+            source.a,
+        };
+    }
+}
+
+static TextureSlot CreatePaperTexture(void)
+{
+    enum { PAPER_SIZE = 256 };
+    TextureSlot slot = { 0 };
+    Color *pixels = (Color *)malloc(PAPER_SIZE*PAPER_SIZE*sizeof(Color));
+
+    if (pixels == NULL) {
+        slot.texture = UploadCheckedTexture(
+            PAPER_SIZE,
+            PAPER_SIZE,
+            (Color) { 226, 214, 178, 255 },
+            (Color) { 215, 199, 160, 255 });
+        slot.loaded = (slot.texture.id != 0);
+        return slot;
+    }
+
+    for (int y = 0; y < PAPER_SIZE; ++y) {
+        const int fiber = (int)(HashU32((unsigned int)y*241u + 19u) & 15u) - 7;
+
+        for (int x = 0; x < PAPER_SIZE; ++x) {
+            const unsigned int hash = HashU32((unsigned int)x*1973u + (unsigned int)y*9277u + 131u);
+            const int grain = (int)(hash & 31u) - 15;
+            int fleck = 0;
+
+            if ((hash & 1023u) < 8u) {
+                fleck = ((hash & 2048u) != 0u) ? 28 : -32;
+            }
+
+            const int value = grain + fiber + fleck;
+            pixels[y*PAPER_SIZE + x] = (Color) {
+                ColorByteFromInt(226 + value),
+                ColorByteFromInt(214 + value),
+                ColorByteFromInt(178 + value/2),
+                255,
+            };
+        }
+    }
+
+    Image image = {
+        .data = pixels,
+        .width = PAPER_SIZE,
+        .height = PAPER_SIZE,
+        .mipmaps = 1,
+        .format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8,
+    };
+
+    slot.texture = LoadTextureFromImage(image);
+    free(pixels);
+
+    if (slot.texture.id != 0) {
+        SetTextureFilter(slot.texture, TEXTURE_FILTER_BILINEAR);
+        SetTextureWrap(slot.texture, TEXTURE_WRAP_REPEAT);
+    }
+
+    slot.loaded = (slot.texture.id != 0);
+    return slot;
+}
+
 static const char *AssetPath(const char *relative_path)
 {
     static char buffers[8][512];
@@ -142,11 +309,13 @@ static TextureSlot LoadMapTexture(void)
 
     if (FileExists(path)) {
         Image image = LoadImage(path);
+        ApplyPaperMapGrade(&image);
         slot.texture = LoadTextureFromImage(image);
         UnloadImage(image);
         SetTextureFilter(slot.texture, TEXTURE_FILTER_BILINEAR);
     } else if (FileExists(fallback_path)) {
         Image image = LoadImage(fallback_path);
+        ApplyPaperMapGrade(&image);
         slot.texture = LoadTextureFromImage(image);
         UnloadImage(image);
         SetTextureFilter(slot.texture, TEXTURE_FILTER_BILINEAR);
@@ -456,6 +625,22 @@ static void UpdateSmoothCamera(TravelRuntime *runtime, float dt)
     runtime->camera.zoom = LerpFloat(runtime->camera.zoom, desired_zoom, zoom_blend);
 }
 
+static void DrawPaperTexture(const TravelRuntime *runtime, Rectangle area, float alpha)
+{
+    if (!runtime->paper.loaded || (runtime->paper.texture.id == 0)) {
+        DrawRectangleRec(area, Fade((Color) { 226, 214, 178, 255 }, alpha));
+        return;
+    }
+
+    DrawTexturePro(
+        runtime->paper.texture,
+        (Rectangle) { area.x, area.y, area.width, area.height },
+        area,
+        (Vector2) { 0.0f, 0.0f },
+        0.0f,
+        Fade(WHITE, alpha));
+}
+
 static void DrawMap(const TravelRuntime *runtime, int screen_width, int screen_height)
 {
     Camera2D camera = { 0 };
@@ -467,6 +652,8 @@ static void DrawMap(const TravelRuntime *runtime, int screen_width, int screen_h
     BeginMode2D(camera);
         DrawTexture(runtime->map.texture, 0, 0, WHITE);
     EndMode2D();
+    DrawRectangle(0, 0, screen_width, screen_height, Fade((Color) { 241, 229, 190, 255 }, 0.08f));
+    DrawPaperTexture(runtime, (Rectangle) { 0.0f, 0.0f, (float)screen_width, (float)screen_height }, 0.10f);
 
     const bool photos_visible = (runtime->photo_alpha > 0.001f) &&
         (runtime->phase != TRIP_ZOOM_OUT);
@@ -478,11 +665,11 @@ static void DrawMap(const TravelRuntime *runtime, int screen_width, int screen_h
         const bool current = (i == runtime->location_index);
         const float radius = photos_visible ? 3.0f : (current ? 4.0f : 3.0f);
         const float alpha = photos_visible ? 0.42f : 1.0f;
-        const Color fill = current ? (Color) { 247, 199, 90, 255 } : (Color) { 238, 239, 232, 210 };
+        const Color fill = current ? (Color) { 183, 82, 49, 255 } : (Color) { 70, 94, 75, 210 };
 
-        DrawCircleV(screen_pixel, radius + 2.0f, Fade((Color) { 0, 0, 0, 255 }, alpha*0.28f));
+        DrawCircleV(screen_pixel, radius + 2.0f, Fade((Color) { 49, 39, 27, 255 }, alpha*0.24f));
         DrawCircleV(screen_pixel, radius, Fade(fill, alpha));
-        DrawCircleLines((int)screen_pixel.x, (int)screen_pixel.y, radius + 1.0f, Fade((Color) { 35, 35, 35, 255 }, alpha*0.72f));
+        DrawCircleLines((int)screen_pixel.x, (int)screen_pixel.y, radius + 1.0f, Fade((Color) { 42, 38, 28, 255 }, alpha*0.72f));
     }
 }
 
@@ -504,33 +691,14 @@ static void DrawPhotoCollage(const TravelRuntime *runtime, int screen_width, int
     const float bottom = (float)screen_height - bottom_band_height - gap*0.95f;
     const float width = right - left;
     const float height = bottom - top;
+    const Rectangle grid_area = { left, top, width, height };
     Rectangle cells[TRAVELPI_MAX_PHOTOS_PER_LOCATION] = { 0 };
 
     if (count <= 0 || width <= 1.0f || height <= 1.0f) {
         return;
     }
 
-    if (count == 1) {
-        cells[0] = (Rectangle) { left, top, width, height };
-    } else if (count == 2) {
-        const float cell_width = (width - gap)*0.5f;
-        cells[0] = (Rectangle) { left, top, cell_width, height };
-        cells[1] = (Rectangle) { left + cell_width + gap, top, cell_width, height };
-    } else if (count == 3) {
-        const float left_width = (width - gap)*0.58f;
-        const float right_width = width - left_width - gap;
-        const float right_height = (height - gap)*0.5f;
-        cells[0] = (Rectangle) { left, top, left_width, height };
-        cells[1] = (Rectangle) { left + left_width + gap, top, right_width, right_height };
-        cells[2] = (Rectangle) { left + left_width + gap, top + right_height + gap, right_width, right_height };
-    } else {
-        const float cell_width = (width - gap)*0.5f;
-        const float cell_height = (height - gap)*0.5f;
-        cells[0] = (Rectangle) { left, top, cell_width, cell_height };
-        cells[1] = (Rectangle) { left + cell_width + gap, top, cell_width, cell_height };
-        cells[2] = (Rectangle) { left, top + cell_height + gap, cell_width, cell_height };
-        cells[3] = (Rectangle) { left + cell_width + gap, top + cell_height + gap, cell_width, cell_height };
-    }
+    BuildPhotoGrid(cells, count, grid_area, gap);
 
     for (int i = 0; i < runtime->current_bank.target_count; ++i) {
         const TextureSlot *slot = &runtime->current_bank.photos[i];
@@ -540,25 +708,15 @@ static void DrawPhotoCollage(const TravelRuntime *runtime, int screen_width, int
         }
 
         const Rectangle cell = cells[i];
-        const float mat = MaxFloat(MinFloat(cell.width, cell.height)*0.030f, 12.0f);
-        const float bottom_mat = mat*1.55f;
-        const Rectangle card = {
-            cell.x,
-            cell.y,
-            cell.width,
-            cell.height,
-        };
-        const Rectangle photo_area = {
-            card.x + mat,
-            card.y + mat,
-            card.width - mat*2.0f,
-            card.height - mat - bottom_mat,
-        };
+        const float cell_padding = MaxFloat(MinFloat(cell.width, cell.height)*0.012f, 6.0f);
+        const float mat = MaxFloat(MinFloat(cell.width, cell.height)*0.015f, 8.0f);
+        const Rectangle photo_area = InsetRectangle(cell, cell_padding + mat);
         const float src_aspect = (float)slot->texture.width/(float)slot->texture.height;
         const float dst_aspect = photo_area.width/photo_area.height;
         float dst_width = photo_area.width;
         float dst_height = photo_area.height;
         Vector2 dst_pos = { photo_area.x, photo_area.y };
+        Rectangle card;
         Rectangle src = { 0.0f, 0.0f, (float)slot->texture.width, (float)slot->texture.height };
 
         if (src_aspect > dst_aspect) {
@@ -569,9 +727,15 @@ static void DrawPhotoCollage(const TravelRuntime *runtime, int screen_width, int
             dst_pos.x = photo_area.x + (photo_area.width - dst_width)*0.5f;
         }
 
-        DrawRectangle((int)(card.x + 8.0f), (int)(card.y + 10.0f), (int)card.width, (int)card.height, Fade((Color) { 0, 0, 0, 255 }, alpha*0.32f));
-        DrawRectangleRec(card, Fade((Color) { 246, 244, 235, 255 }, alpha));
-        DrawRectangleRec(photo_area, Fade((Color) { 238, 235, 222, 255 }, alpha));
+        card = (Rectangle) {
+            dst_pos.x - mat,
+            dst_pos.y - mat,
+            dst_width + mat*2.0f,
+            dst_height + mat*2.0f,
+        };
+
+        DrawRectangle((int)(card.x + 8.0f), (int)(card.y + 10.0f), (int)card.width, (int)card.height, Fade((Color) { 47, 39, 26, 255 }, alpha*0.24f));
+        DrawRectangleRec(card, Fade((Color) { 239, 232, 203, 255 }, alpha));
         DrawTexturePro(
             slot->texture,
             src,
@@ -579,28 +743,8 @@ static void DrawPhotoCollage(const TravelRuntime *runtime, int screen_width, int
             (Vector2) { 0.0f, 0.0f },
             0.0f,
             Fade(WHITE, alpha));
-        DrawRectangleLinesEx(card, 2.0f, Fade((Color) { 255, 255, 255, 255 }, alpha*0.72f));
+        DrawRectangleLinesEx(card, 2.0f, Fade((Color) { 255, 250, 225, 255 }, alpha*0.72f));
     }
-}
-
-static void DrawDisplayFrame(int screen_width, int screen_height)
-{
-    const float rail = (float)((screen_width < screen_height) ? screen_width : screen_height)*0.035f;
-    const Color outer = { 91, 64, 43, 255 };
-    const Color inner = { 159, 119, 80, 255 };
-    const Color line = { 31, 26, 21, 210 };
-
-    DrawRectangle(0, 0, screen_width, (int)rail, outer);
-    DrawRectangle(0, screen_height - (int)rail, screen_width, (int)rail, outer);
-    DrawRectangle(0, 0, (int)rail, screen_height, outer);
-    DrawRectangle(screen_width - (int)rail, 0, (int)rail, screen_height, outer);
-
-    DrawRectangle((int)(rail*0.34f), (int)(rail*0.34f), screen_width - (int)(rail*0.68f), (int)(rail*0.22f), inner);
-    DrawRectangle((int)(rail*0.34f), screen_height - (int)(rail*0.56f), screen_width - (int)(rail*0.68f), (int)(rail*0.22f), inner);
-    DrawRectangle((int)(rail*0.34f), (int)(rail*0.34f), (int)(rail*0.22f), screen_height - (int)(rail*0.68f), inner);
-    DrawRectangle(screen_width - (int)(rail*0.56f), (int)(rail*0.34f), (int)(rail*0.22f), screen_height - (int)(rail*0.68f), inner);
-
-    DrawRectangleLinesEx((Rectangle) { rail, rail, (float)screen_width - rail*2.0f, (float)screen_height - rail*2.0f }, 2.0f, line);
 }
 
 static void DrawProfileOverlay(const TravelRuntime *runtime, int screen_width)
@@ -650,21 +794,24 @@ static void DrawOverlay(const TravelRuntime *runtime, int screen_width, int scre
         const int caption_width = MeasureText(caption, caption_size);
         const int caption_x = screen_width - right_padding - caption_width;
         const int caption_y = band_y + (int)((band_height - (float)caption_size)*0.52f);
+        const Rectangle band = { 0.0f, (float)band_y, (float)screen_width, band_height + 2.0f };
+        const Color ink = { 38, 45, 38, 255 };
+        const Color muted_ink = { 76, 84, 67, 255 };
 
-        DrawRectangle(0, band_y, screen_width, (int)band_height + 2, (Color) { 8, 10, 12, 236 });
-        DrawRectangleGradientV(0, band_y - 32, screen_width, 32, (Color) { 0, 0, 0, 0 }, (Color) { 8, 10, 12, 220 });
-        DrawLine(0, band_y, screen_width, band_y, Fade(RAYWHITE, 0.48f));
-        DrawText(location->name, x, y, title_size, RAYWHITE);
+        DrawRectangleGradientV(0, band_y - 32, screen_width, 32, (Color) { 0, 0, 0, 0 }, (Color) { 71, 57, 34, 74 });
+        DrawRectangleRec(band, (Color) { 231, 220, 186, 248 });
+        DrawPaperTexture(runtime, band, 0.58f);
+        DrawRectangleGradientV(0, band_y, screen_width, 18, (Color) { 112, 87, 48, 76 }, (Color) { 0, 0, 0, 0 });
+        DrawLine(0, band_y, screen_width, band_y, Fade((Color) { 84, 69, 43, 255 }, 0.58f));
+        DrawText(location->name, x, y, title_size, ink);
 
         if (has_date) {
-            DrawText(location->date_label, x, y + title_size + 4, date_size, Fade(RAYWHITE, 0.82f));
-            DrawText(caption, caption_x, caption_y, caption_size, Fade(RAYWHITE, 0.90f));
+            DrawText(location->date_label, x, y + title_size + 4, date_size, Fade(muted_ink, 0.92f));
+            DrawText(caption, caption_x, caption_y, caption_size, Fade(ink, 0.88f));
         } else {
-            DrawText(caption, caption_x, caption_y, caption_size, Fade(RAYWHITE, 0.90f));
+            DrawText(caption, caption_x, caption_y, caption_size, Fade(ink, 0.88f));
         }
     }
-
-    DrawDisplayFrame(screen_width, screen_height);
 
     if (options->show_profile) {
         DrawProfileOverlay(runtime, screen_width);
@@ -741,6 +888,8 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    runtime.paper = CreatePaperTexture();
+
     runtime.macro_target = (Vector2) { (float)runtime.map.texture.width*0.5f, (float)runtime.map.texture.height*0.5f };
     runtime.macro_zoom = FitMapZoom(runtime.map.texture, screen_width, screen_height);
     runtime.camera.target = runtime.macro_target;
@@ -797,6 +946,7 @@ int main(int argc, char **argv)
 
     UnloadPhotoBank(&runtime.current_bank);
     UnloadPhotoBank(&runtime.preload_bank);
+    UnloadTextureSlot(&runtime.paper);
     UnloadTextureSlot(&runtime.map);
     CloseWindow();
     return 0;

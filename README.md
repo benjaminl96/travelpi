@@ -85,7 +85,7 @@ center from the median GPS coordinates, copies every readable still image into
 `assets/source/photos/`, appends `config/trips.json`, regenerates
 `src/travel_config.c`, and optionally runs the 1080p preparation step. At
 runtime, each trip is rendered as as many print-style gallery pages as needed,
-with up to four photos resident per page. Pages hold for 15 seconds by default
+with up to six photos resident per page. Pages hold for 15 seconds by default
 and page-to-page fades are intentionally quick.
 
 Trip names and captions are human-supplied because EXIF reliably gives capture
