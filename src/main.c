@@ -96,7 +96,6 @@ typedef struct TravelRuntime {
     bool banner_font_loaded;
     MapTileCache tiles;
     PhotoBank current_bank;
-    PhotoBank preload_bank;
     size_t location_index;
     int page_index;
     TripPhase phase;
@@ -346,6 +345,21 @@ static Texture2D UploadCheckedTexture(int width, int height, Color a, Color b)
     return texture;
 }
 
+static Texture2D LoadMapImageTexture(const char *path)
+{
+    Texture2D texture = { 0 };
+    Image image = LoadImage(path);
+
+    if (image.data == NULL) {
+        return texture;
+    }
+
+    ImageFormat(&image, PIXELFORMAT_UNCOMPRESSED_R5G6B5);
+    texture = LoadTextureFromImage(image);
+    UnloadImage(image);
+    return texture;
+}
+
 static TextureSlot LoadMapTexture(void)
 {
     TextureSlot slot = { 0 };
@@ -353,15 +367,11 @@ static TextureSlot LoadMapTexture(void)
     const char *fallback_path = AssetPath(TRAVELPI_MAP_FALLBACK_PATH);
 
     if (FileExists(path)) {
-        Image image = LoadImage(path);
-        slot.texture = LoadTextureFromImage(image);
-        UnloadImage(image);
+        slot.texture = LoadMapImageTexture(path);
         SetTextureFilter(slot.texture, TEXTURE_FILTER_BILINEAR);
         SetTextureWrap(slot.texture, TEXTURE_WRAP_CLAMP);
     } else if (FileExists(fallback_path)) {
-        Image image = LoadImage(fallback_path);
-        slot.texture = LoadTextureFromImage(image);
-        UnloadImage(image);
+        slot.texture = LoadMapImageTexture(fallback_path);
         SetTextureFilter(slot.texture, TEXTURE_FILTER_BILINEAR);
         SetTextureWrap(slot.texture, TEXTURE_WRAP_CLAMP);
     } else {
@@ -413,9 +423,7 @@ static TextureSlot LoadMapTileTexture(int tile_x, int tile_y)
     }
 
     if (FileExists(path)) {
-        Image image = LoadImage(path);
-        slot.texture = LoadTextureFromImage(image);
-        UnloadImage(image);
+        slot.texture = LoadMapImageTexture(path);
         SetTextureFilter(slot.texture, TEXTURE_FILTER_BILINEAR);
         SetTextureWrap(slot.texture, TEXTURE_WRAP_CLAMP);
     }
@@ -691,70 +699,6 @@ static void LoadPhotoBankBlocking(PhotoBank *bank, size_t location_index, int pa
     bank->valid = true;
 }
 
-static bool IsPhotoBankComplete(const PhotoBank *bank, size_t location_index, int page_index)
-{
-    return bank->valid &&
-        (bank->location_index == (location_index % g_location_count)) &&
-        (bank->page_index == page_index) &&
-        (bank->cursor >= bank->target_count);
-}
-
-static void StartPhotoPreload(PhotoBank *bank, size_t location_index, int page_index)
-{
-    location_index %= g_location_count;
-
-    if (bank->valid && (bank->location_index == location_index) && (bank->page_index == page_index)) {
-        return;
-    }
-
-    UnloadPhotoBank(bank);
-    bank->location_index = location_index;
-    bank->page_index = page_index;
-    bank->target_count = PhotoCountForPage(&g_locations[location_index], page_index);
-    bank->cursor = 0;
-    bank->valid = true;
-}
-
-static void ContinuePhotoPreload(PhotoBank *bank)
-{
-    if (!bank->valid || (bank->cursor >= bank->target_count)) {
-        return;
-    }
-
-    const TravelLocation *location = &g_locations[bank->location_index];
-    const int cursor = bank->cursor;
-
-    if (cursor < TRAVELPI_MAX_PHOTOS_PER_LOCATION) {
-        const int photo_index = PhotoStartForPage(bank->page_index) + cursor;
-        bank->photos[cursor] = LoadPhotoTexture(location->photos[photo_index].path, cursor);
-    }
-
-    bank->cursor++;
-}
-
-static void NextPageOrLocation(const TravelRuntime *runtime, size_t *location_index, int *page_index)
-{
-    const TravelLocation *location = CurrentLocation(runtime);
-    const int page_count = PageCountForLocation(location);
-
-    if ((runtime->page_index + 1) < page_count) {
-        *location_index = runtime->location_index;
-        *page_index = runtime->page_index + 1;
-    } else {
-        *location_index = (runtime->location_index + 1) % g_location_count;
-        *page_index = 0;
-    }
-}
-
-static void PreloadNextPagePhotos(TravelRuntime *runtime)
-{
-    size_t next_index = 0;
-    int next_page = 0;
-    NextPageOrLocation(runtime, &next_index, &next_page);
-    StartPhotoPreload(&runtime->preload_bank, next_index, next_page);
-    ContinuePhotoPreload(&runtime->preload_bank);
-}
-
 static void BeginPage(TravelRuntime *runtime, size_t location_index, int page_index)
 {
     location_index %= g_location_count;
@@ -764,14 +708,7 @@ static void BeginPage(TravelRuntime *runtime, size_t location_index, int page_in
     runtime->phase_time = 0.0f;
     runtime->photo_alpha = 0.0f;
 
-    if (IsPhotoBankComplete(&runtime->preload_bank, location_index, page_index)) {
-        UnloadPhotoBank(&runtime->current_bank);
-        runtime->current_bank = runtime->preload_bank;
-        ResetPhotoBank(&runtime->preload_bank);
-    } else {
-        LoadPhotoBankBlocking(&runtime->current_bank, location_index, page_index);
-        UnloadPhotoBank(&runtime->preload_bank);
-    }
+    LoadPhotoBankBlocking(&runtime->current_bank, location_index, page_index);
 }
 
 static void BeginLocation(TravelRuntime *runtime, size_t location_index)
@@ -790,7 +727,6 @@ static bool ReloadRuntimeTrips(TravelRuntime *runtime, RuntimeTravelConfig *acti
     }
 
     UnloadPhotoBank(&runtime->current_bank);
-    UnloadPhotoBank(&runtime->preload_bank);
     UnloadRuntimeTravelConfig(active_config);
     *active_config = next_config;
     g_locations = active_config->locations;
@@ -828,7 +764,6 @@ static void UpdatePhase(TravelRuntime *runtime, float dt)
             break;
         case TRIP_HOLD:
             runtime->photo_alpha = 1.0f;
-            PreloadNextPagePhotos(runtime);
             if (runtime->phase_time >= location->hold_seconds) {
                 ResetPhase(runtime, TRIP_PHOTOS_OUT);
             }
@@ -847,9 +782,12 @@ static void UpdatePhase(TravelRuntime *runtime, float dt)
             break;
         case TRIP_ZOOM_OUT:
             runtime->photo_alpha = 0.0f;
-            PreloadNextPagePhotos(runtime);
+            if (runtime->current_bank.valid) {
+                UnloadPhotoBank(&runtime->current_bank);
+            }
             if (runtime->phase_time >= location->zoom_out_seconds) {
                 BeginLocation(runtime, runtime->location_index + 1);
+                ResetPhase(runtime, TRIP_PHOTOS_IN);
             }
             break;
     }
@@ -858,10 +796,15 @@ static void UpdatePhase(TravelRuntime *runtime, float dt)
 static void UpdateSmoothCamera(TravelRuntime *runtime, float dt)
 {
     const TravelLocation *location = CurrentLocation(runtime);
-    const bool zooming_out = (runtime->phase == TRIP_ZOOM_OUT);
-    const Vector2 destination_pixel = ProjectGeoToMap(location, runtime->map.texture);
-    const Vector2 desired_target = zooming_out ? runtime->macro_target : destination_pixel;
-    const float desired_zoom = zooming_out ? runtime->macro_zoom : location->close_zoom;
+    const bool changing_locations = (runtime->phase == TRIP_ZOOM_OUT);
+    const TravelLocation *target_location = location;
+
+    if (changing_locations) {
+        target_location = &g_locations[(runtime->location_index + 1) % g_location_count];
+    }
+
+    const Vector2 desired_target = ProjectGeoToMap(target_location, runtime->map.texture);
+    const float desired_zoom = target_location->close_zoom;
     const float camera_blend = 1.0f - expf(-TRAVELPI_CAMERA_RESPONSE*dt);
     const float zoom_blend = 1.0f - expf(-TRAVELPI_ZOOM_RESPONSE*dt);
 
@@ -885,28 +828,62 @@ static void DrawPaperTexture(const TravelRuntime *runtime, Rectangle area, float
         Fade(WHITE, alpha));
 }
 
-static MapTileRange VisibleMapTileRange(const TravelRuntime *runtime, int screen_width, int screen_height)
+static MapTileRange MapTileRangeForView(
+    const TravelRuntime *runtime,
+    Vector2 target,
+    float zoom,
+    int screen_width,
+    int screen_height)
 {
     const MapTileCache *cache = &runtime->tiles;
     MapTileRange range = { 0 };
 
-    if (!cache->enabled || cache->tile_size <= 0) {
+    if (!cache->enabled || cache->tile_size <= 0 || zoom <= 0.001f) {
         return range;
     }
 
-    const float half_width = ((float)screen_width*0.5f)/runtime->camera.zoom;
-    const float half_height = ((float)screen_height*0.5f)/runtime->camera.zoom;
-    const float source_left = MaxFloat((runtime->camera.target.x - half_width)*cache->scale_x, 0.0f);
-    const float source_top = MaxFloat((runtime->camera.target.y - half_height)*cache->scale_y, 0.0f);
-    const float source_right = MinFloat((runtime->camera.target.x + half_width)*cache->scale_x, (float)cache->source_width);
-    const float source_bottom = MinFloat((runtime->camera.target.y + half_height)*cache->scale_y, (float)cache->source_height);
+    const float half_width = ((float)screen_width*0.5f)/zoom;
+    const float half_height = ((float)screen_height*0.5f)/zoom;
+    const float source_left = MaxFloat((target.x - half_width)*cache->scale_x, 0.0f);
+    const float source_top = MaxFloat((target.y - half_height)*cache->scale_y, 0.0f);
+    const float source_right = MinFloat((target.x + half_width)*cache->scale_x, (float)cache->source_width);
+    const float source_bottom = MinFloat((target.y + half_height)*cache->scale_y, (float)cache->source_height);
 
-    range.min_x = ClampInt((int)floorf(source_left/(float)cache->tile_size) - 1, 0, cache->columns - 1);
-    range.min_y = ClampInt((int)floorf(source_top/(float)cache->tile_size) - 1, 0, cache->rows - 1);
-    range.max_x = ClampInt((int)floorf(source_right/(float)cache->tile_size) + 1, 0, cache->columns - 1);
-    range.max_y = ClampInt((int)floorf(source_bottom/(float)cache->tile_size) + 1, 0, cache->rows - 1);
+    range.min_x = ClampInt((int)floorf(source_left/(float)cache->tile_size) - TRAVELPI_MAP_TILE_PREFETCH_MARGIN, 0, cache->columns - 1);
+    range.min_y = ClampInt((int)floorf(source_top/(float)cache->tile_size) - TRAVELPI_MAP_TILE_PREFETCH_MARGIN, 0, cache->rows - 1);
+    range.max_x = ClampInt((int)floorf(source_right/(float)cache->tile_size) + TRAVELPI_MAP_TILE_PREFETCH_MARGIN, 0, cache->columns - 1);
+    range.max_y = ClampInt((int)floorf(source_bottom/(float)cache->tile_size) + TRAVELPI_MAP_TILE_PREFETCH_MARGIN, 0, cache->rows - 1);
     range.valid = true;
     return range;
+}
+
+static MapTileRange VisibleMapTileRange(const TravelRuntime *runtime, int screen_width, int screen_height)
+{
+    return MapTileRangeForView(
+        runtime,
+        runtime->camera.target,
+        runtime->camera.zoom,
+        screen_width,
+        screen_height);
+}
+
+static void RequestMapTilesInRange(MapTileCache *cache, MapTileRange range)
+{
+    if (!range.valid) {
+        return;
+    }
+
+    for (int tile_y = range.min_y; tile_y <= range.max_y; ++tile_y) {
+        for (int tile_x = range.min_x; tile_x <= range.max_x; ++tile_x) {
+            GetMapTileSlot(cache, tile_x, tile_y);
+        }
+    }
+}
+
+static bool IsLastPageForCurrentLocation(const TravelRuntime *runtime)
+{
+    const TravelLocation *location = CurrentLocation(runtime);
+    return (runtime->page_index + 1) >= PageCountForLocation(location);
 }
 
 static void UpdateVisibleMapTiles(TravelRuntime *runtime, int screen_width, int screen_height)
@@ -915,17 +892,28 @@ static void UpdateVisibleMapTiles(TravelRuntime *runtime, int screen_width, int 
     const float tile_alpha = SmoothStep01((runtime->camera.zoom - TRAVELPI_MAP_TILE_MIN_ZOOM)/0.65f);
     const MapTileRange range = VisibleMapTileRange(runtime, screen_width, screen_height);
 
-    if (!range.valid || tile_alpha <= 0.001f) {
+    if (!cache->enabled) {
         return;
     }
 
     cache->frame_id++;
     cache->loads_this_frame = 0;
 
-    for (int tile_y = range.min_y; tile_y <= range.max_y; ++tile_y) {
-        for (int tile_x = range.min_x; tile_x <= range.max_x; ++tile_x) {
-            GetMapTileSlot(cache, tile_x, tile_y);
-        }
+    if (range.valid && tile_alpha > 0.001f) {
+        RequestMapTilesInRange(cache, range);
+    }
+
+    if (runtime->phase == TRIP_PHOTOS_OUT && IsLastPageForCurrentLocation(runtime)) {
+        const TravelLocation *next_location = &g_locations[(runtime->location_index + 1) % g_location_count];
+        const Vector2 next_target = ProjectGeoToMap(next_location, runtime->map.texture);
+        const MapTileRange next_range = MapTileRangeForView(
+            runtime,
+            next_target,
+            next_location->close_zoom,
+            screen_width,
+            screen_height);
+
+        RequestMapTilesInRange(cache, next_range);
     }
 }
 
@@ -1232,7 +1220,6 @@ int main(int argc, char **argv)
 
     TravelRuntime runtime = { 0 };
     ResetPhotoBank(&runtime.current_bank);
-    ResetPhotoBank(&runtime.preload_bank);
     runtime.banner_font_loaded = LoadBannerFont(&runtime.banner_font);
     if (!runtime.banner_font_loaded) {
         fprintf(stderr, "travelpi: banner font not found, using default font\n");
@@ -1319,7 +1306,6 @@ int main(int argc, char **argv)
     }
 
     UnloadPhotoBank(&runtime.current_bank);
-    UnloadPhotoBank(&runtime.preload_bank);
     UnloadMapTileCache(&runtime.tiles);
     if (runtime.banner_font_loaded) {
         UnloadFont(runtime.banner_font);

@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-RAYLIB_VERSION="${RAYLIB_VERSION:-6.0.0}"
+RAYLIB_VERSION="${RAYLIB_VERSION:-6.0}"
 RAYLIB_DIR="${RAYLIB_DIR:-$HOME/src/raylib}"
 
 mkdir -p "$(dirname "$RAYLIB_DIR")"
