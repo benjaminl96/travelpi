@@ -306,9 +306,9 @@ is still generated for fallback builds and compatibility with older workflows.
   texture with a simple equirectangular transform.
 - `pixel_nudge` is an art-direction offset in final map pixels for maps whose
   labels or visual geography need slight alignment correction.
-- `caption` is kept for manifest compatibility; the current lower bar uses the
-  trip name/date on the left and only shows a right-side `page N/M` label for
-  multi-page trips.
+- `caption` is kept for manifest compatibility; the current lower bar shows a
+  right-aligned trip name and, when needed, a slightly smaller right-aligned
+  `page N/M` label for multi-page trips.
 - `close_zoom` controls how far into the region the camera travels.
 - `hold_seconds`, `fade_seconds`, `zoom_in_seconds`, and `zoom_out_seconds`
   control the cinematic beat.

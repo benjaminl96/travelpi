@@ -612,7 +612,7 @@ static bool BuildLocation(const JsonValue *trip_json, TravelLocation *location)
 
     location->close_zoom = ObjectFloat(trip_json, "close_zoom", 10.0f);
     location->zoom_in_seconds = ObjectFloat(trip_json, "zoom_in_seconds", 2.35f);
-    location->hold_seconds = ObjectFloat(trip_json, "hold_seconds", 15.0f);
+    location->hold_seconds = ObjectFloat(trip_json, "hold_seconds", 11.25f);
     location->fade_seconds = ObjectFloat(trip_json, "fade_seconds", 0.45f);
     location->zoom_out_seconds = ObjectFloat(trip_json, "zoom_out_seconds", 2.05f);
 

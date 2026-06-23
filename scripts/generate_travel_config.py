@@ -9,7 +9,7 @@ DEFAULTS = {
     "pixel_nudge": [0.0, 0.0],
     "close_zoom": 10.0,
     "zoom_in_seconds": 2.35,
-    "hold_seconds": 15.0,
+    "hold_seconds": 11.25,
     "fade_seconds": 0.45,
     "zoom_out_seconds": 2.05,
 }

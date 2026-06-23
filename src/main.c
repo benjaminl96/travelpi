@@ -158,6 +158,11 @@ static float MaxFloat(float a, float b)
     return (a > b) ? a : b;
 }
 
+static float BottomBandHeight(int screen_height)
+{
+    return MaxFloat((float)screen_height*0.072f, 78.0f);
+}
+
 static int ClampInt(int value, int min_value, int max_value)
 {
     if (value < min_value) return min_value;
@@ -227,6 +232,22 @@ static void DrawBannerText(const TravelRuntime *runtime, const char *text, Vecto
     } else {
         DrawText(text, (int)position.x, (int)position.y, (int)size, color);
     }
+}
+
+static void DrawBannerTextBold(const TravelRuntime *runtime, const char *text, Vector2 position, float size, Color color)
+{
+    const Color shadow = Fade((Color) { 24, 20, 14, 255 }, color.a*0.62f);
+
+    DrawBannerText(runtime, text, (Vector2) { position.x + 1.0f, position.y + 1.0f }, size, shadow);
+    DrawBannerText(runtime, text, (Vector2) { position.x + 0.5f, position.y }, size, shadow);
+    DrawBannerText(runtime, text, (Vector2) { position.x, position.y + 0.5f }, size, shadow);
+    DrawBannerText(runtime, text, position, size, color);
+}
+
+static void DrawBannerTextBoldRightAligned(const TravelRuntime *runtime, const char *text, float right_edge, float y, float size, Color color)
+{
+    const float width = MeasureBannerText(runtime, text, size).x;
+    DrawBannerTextBold(runtime, text, (Vector2) { right_edge - width, y }, size, color);
 }
 
 static int PhotoGridColumnCount(int count)
@@ -985,9 +1006,51 @@ static void DrawMap(TravelRuntime *runtime, int screen_width, int screen_height)
         const float alpha = photos_visible ? 0.42f : 1.0f;
         const Color fill = current ? (Color) { 183, 82, 49, 255 } : (Color) { 70, 94, 75, 210 };
 
-        DrawCircleV(screen_pixel, radius + 2.0f, Fade((Color) { 49, 39, 27, 255 }, alpha*0.24f));
-        DrawCircleV(screen_pixel, radius, Fade(fill, alpha));
-        DrawCircleLines((int)screen_pixel.x, (int)screen_pixel.y, radius + 1.0f, Fade((Color) { 42, 38, 28, 255 }, alpha*0.72f));
+        if (current) {
+            const float marker_alpha = 0.98f;
+            const float outline_alpha = photos_visible ? 0.96f : 1.0f;
+            const float glow_radius = photos_visible ? 14.0f : 16.0f;
+            const float outline_outer_radius = photos_visible ? 14.0f : 16.0f;
+            const float outline_inner_radius = outline_outer_radius*0.42f;
+            const float outer_radius = photos_visible ? 12.0f : 14.0f;
+            const float inner_radius = outer_radius*0.42f;
+            Vector2 outline_points[12];
+            Vector2 star_points[12];
+
+            outline_points[0] = screen_pixel;
+            for (int point = 0; point < 10; ++point) {
+                const float angle = (-90.0f + (float)point*36.0f)*DEG2RAD;
+                const float outline_point_radius = ((point % 2) == 0) ? outline_outer_radius : outline_inner_radius;
+                outline_points[point + 1] = (Vector2) {
+                    screen_pixel.x + cosf(angle)*outline_point_radius,
+                    screen_pixel.y + sinf(angle)*outline_point_radius,
+                };
+            }
+            outline_points[11] = outline_points[1];
+
+            star_points[0] = screen_pixel;
+            for (int point = 0; point < 10; ++point) {
+                const float angle = (-90.0f + (float)point*36.0f)*DEG2RAD;
+                const float point_radius = ((point % 2) == 0) ? outer_radius : inner_radius;
+                star_points[point + 1] = (Vector2) {
+                    screen_pixel.x + cosf(angle)*point_radius,
+                    screen_pixel.y + sinf(angle)*point_radius,
+                };
+            }
+            star_points[11] = star_points[1];
+
+            DrawCircleV(screen_pixel, glow_radius, Fade((Color) { 49, 39, 27, 255 }, photos_visible ? 0.20f : 0.28f));
+            DrawTriangleFan(outline_points, 12, Fade((Color) { 54, 38, 20, 255 }, outline_alpha));
+            DrawTriangleFan(star_points, 12, Fade((Color) { 242, 195, 72, 255 }, marker_alpha));
+            for (int point = 1; point < 11; ++point) {
+                DrawLineV(star_points[point], star_points[point + 1], Fade((Color) { 54, 38, 20, 255 }, outline_alpha*0.92f));
+            }
+            DrawCircleLines((int)screen_pixel.x, (int)screen_pixel.y, inner_radius + 1.0f, Fade((Color) { 255, 251, 228, 255 }, 0.92f));
+        } else {
+            DrawCircleV(screen_pixel, radius + 2.0f, Fade((Color) { 49, 39, 27, 255 }, alpha*0.24f));
+            DrawCircleV(screen_pixel, radius, Fade(fill, alpha));
+            DrawCircleLines((int)screen_pixel.x, (int)screen_pixel.y, radius + 1.0f, Fade((Color) { 42, 38, 28, 255 }, alpha*0.72f));
+        }
     }
 }
 
@@ -1000,7 +1063,7 @@ static void DrawPhotoCollage(const TravelRuntime *runtime, int screen_width, int
     }
 
     const int count = runtime->current_bank.target_count;
-    const float bottom_band_height = MaxFloat((float)screen_height*0.090f, 92.0f);
+    const float bottom_band_height = BottomBandHeight(screen_height);
     const float rail = (float)MinFloat((float)screen_width, (float)screen_height)*0.026f;
     const float gap = MaxFloat((float)screen_width*0.018f, 22.0f);
     const float top = rail + gap*0.38f;
@@ -1089,50 +1152,37 @@ static void DrawProfileOverlay(const TravelRuntime *runtime, int screen_width)
 static void DrawOverlay(const TravelRuntime *runtime, int screen_width, int screen_height, const AppOptions *options)
 {
     const TravelLocation *location = CurrentLocation(runtime);
-    char caption[128];
+    char page_label[32];
     const int page_count = PageCountForLocation(location);
-    const float band_height = MaxFloat((float)screen_height*0.090f, 92.0f);
-    const int title_size = (int)MaxFloat((float)screen_height*0.032f, 30.0f);
-    const int date_size = (int)MaxFloat((float)screen_height*0.018f, 18.0f);
-    const int caption_size = (int)MaxFloat((float)screen_height*0.018f, 18.0f);
-    const int x = (int)MaxFloat((float)screen_width*0.036f, 34.0f);
-    const int right_padding = x;
+    const float band_height = BottomBandHeight(screen_height);
+    const int title_size = (int)MaxFloat((float)screen_height*0.035f, 38.0f);
+    const int page_size = (int)MaxFloat((float)screen_height*0.029f, 30.0f);
+    const int side_padding = (int)MaxFloat((float)screen_width*0.036f, 34.0f);
     const int band_y = (int)((float)screen_height - band_height);
-    const int y = band_y + (int)MaxFloat(band_height*0.10f, 9.0f);
+    const float right_edge = (float)screen_width - (float)side_padding;
+    const Vector2 title_metrics = MeasureBannerText(runtime, location->name, (float)title_size);
+    const float title_y = (float)band_y + (band_height - title_metrics.y)*0.5f;
 
-    caption[0] = '\0';
+    page_label[0] = '\0';
     if (page_count > 1) {
-        snprintf(caption, sizeof(caption), "page %d/%d", runtime->page_index + 1, page_count);
+        snprintf(page_label, sizeof(page_label), "page %d/%d", runtime->page_index + 1, page_count);
     }
 
-    const int has_date = (location->date_label != NULL) && (location->date_label[0] != '\0');
-
     if (runtime->phase != TRIP_ZOOM_IN) {
-        const int caption_width = (int)MeasureBannerText(runtime, caption, (float)caption_size).x;
-        const int caption_x = screen_width - right_padding - caption_width;
-        const int caption_y = band_y + (int)((band_height - (float)caption_size)*0.52f);
         const Rectangle band = { 0.0f, (float)band_y, (float)screen_width, band_height + 2.0f };
         const Color ink = { 34, 39, 31, 255 };
-        const Color muted_ink = { 66, 71, 55, 255 };
 
         DrawRectangleGradientV(0, band_y - 32, screen_width, 32, (Color) { 0, 0, 0, 0 }, (Color) { 55, 40, 22, 94 });
         DrawRectangleRec(band, (Color) { 198, 175, 124, 250 });
         DrawPaperTexture(runtime, band, 0.66f);
         DrawRectangleGradientV(0, band_y, screen_width, 18, (Color) { 83, 59, 31, 90 }, (Color) { 0, 0, 0, 0 });
         DrawLine(0, band_y, screen_width, band_y, Fade((Color) { 68, 48, 27, 255 }, 0.62f));
-        DrawBannerText(runtime, location->name, (Vector2) { (float)x, (float)y }, (float)title_size, ink);
+        DrawBannerTextBold(runtime, location->name, (Vector2) { (float)side_padding, title_y }, (float)title_size, ink);
 
-        if (has_date) {
-            DrawBannerText(
-                runtime,
-                location->date_label,
-                (Vector2) { (float)x, (float)y + (float)title_size + 5.0f },
-                (float)date_size,
-                Fade(muted_ink, 0.92f));
-        }
-
-        if (caption[0] != '\0') {
-            DrawBannerText(runtime, caption, (Vector2) { (float)caption_x, (float)caption_y }, (float)caption_size, Fade(ink, 0.88f));
+        if (page_label[0] != '\0') {
+            const Vector2 page_metrics = MeasureBannerText(runtime, page_label, (float)page_size);
+            const float page_y = (float)band_y + (band_height - page_metrics.y)*0.5f;
+            DrawBannerTextBoldRightAligned(runtime, page_label, right_edge, page_y, (float)page_size, Fade(ink, 0.92f));
         }
     }
 
