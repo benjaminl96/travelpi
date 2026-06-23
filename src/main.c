@@ -96,6 +96,11 @@ typedef struct TravelRuntime {
     bool banner_font_loaded;
     MapTileCache tiles;
     PhotoBank current_bank;
+    size_t *trip_order;
+    size_t trip_order_count;
+    size_t trip_order_cursor;
+    size_t next_location_index;
+    bool next_location_valid;
     size_t location_index;
     int page_index;
     TripPhase phase;
@@ -156,6 +161,13 @@ static float MinFloat(float a, float b)
 static float MaxFloat(float a, float b)
 {
     return (a > b) ? a : b;
+}
+
+static void SwapSizeT(size_t *a, size_t *b)
+{
+    const size_t temp = *a;
+    *a = *b;
+    *b = temp;
 }
 
 static float BottomBandHeight(int screen_height)
@@ -248,6 +260,24 @@ static void DrawBannerTextBoldRightAligned(const TravelRuntime *runtime, const c
 {
     const float width = MeasureBannerText(runtime, text, size).x;
     DrawBannerTextBold(runtime, text, (Vector2) { right_edge - width, y }, size, color);
+}
+
+static void DrawBannerTextBoldInline(
+    const TravelRuntime *runtime,
+    const char *left_text,
+    const char *right_text,
+    float x,
+    float left_y,
+    float right_y,
+    float left_size,
+    float right_size,
+    float gap,
+    Color left_color,
+    Color right_color)
+{
+    const float left_width = MeasureBannerText(runtime, left_text, left_size).x;
+    DrawBannerTextBold(runtime, left_text, (Vector2) { x, left_y }, left_size, left_color);
+    DrawBannerTextBold(runtime, right_text, (Vector2) { x + left_width + gap, right_y }, right_size, right_color);
 }
 
 static int PhotoGridColumnCount(int count)
@@ -642,6 +672,126 @@ static const TravelLocation *CurrentLocation(const TravelRuntime *runtime)
     return &g_locations[runtime->location_index % g_location_count];
 }
 
+static void FreeTripOrder(TravelRuntime *runtime)
+{
+    free(runtime->trip_order);
+    runtime->trip_order = NULL;
+    runtime->trip_order_count = 0;
+    runtime->trip_order_cursor = 0;
+    runtime->next_location_index = 0;
+    runtime->next_location_valid = false;
+}
+
+static bool AllocateTripOrder(TravelRuntime *runtime, size_t count)
+{
+    size_t *next_order = NULL;
+
+    if (count > 0) {
+        next_order = (size_t *)calloc(count, sizeof(size_t));
+        if (next_order == NULL) {
+            return false;
+        }
+    }
+
+    free(runtime->trip_order);
+    runtime->trip_order = next_order;
+    runtime->trip_order_count = count;
+    runtime->trip_order_cursor = 0;
+    runtime->next_location_index = 0;
+    runtime->next_location_valid = false;
+    return true;
+}
+
+static void FillSequentialTripOrder(TravelRuntime *runtime)
+{
+    for (size_t i = 0; i < runtime->trip_order_count; ++i) {
+        runtime->trip_order[i] = i;
+    }
+}
+
+static void ShuffleTripOrder(size_t *order, size_t count)
+{
+    if (count <= 1) {
+        return;
+    }
+
+    for (size_t i = count - 1; i > 0; --i) {
+        const size_t j = (size_t)GetRandomValue(0, (int)i);
+        SwapSizeT(&order[i], &order[j]);
+    }
+}
+
+static void BuildTripOrderFromAnchor(TravelRuntime *runtime, size_t anchor_index)
+{
+    if (runtime->trip_order == NULL || runtime->trip_order_count != g_location_count) {
+        if (!AllocateTripOrder(runtime, g_location_count)) {
+            return;
+        }
+    }
+
+    if (runtime->trip_order_count == 0) {
+        return;
+    }
+
+    FillSequentialTripOrder(runtime);
+    ShuffleTripOrder(runtime->trip_order, runtime->trip_order_count);
+
+    if (runtime->trip_order_count > 1) {
+        const size_t anchor = anchor_index % runtime->trip_order_count;
+        size_t anchor_position = 0;
+
+        for (size_t i = 0; i < runtime->trip_order_count; ++i) {
+            if (runtime->trip_order[i] == anchor) {
+                anchor_position = i;
+                break;
+            }
+        }
+
+        if (anchor_position != 0) {
+            SwapSizeT(&runtime->trip_order[0], &runtime->trip_order[anchor_position]);
+        }
+    } else {
+        runtime->trip_order[0] = 0;
+    }
+
+    runtime->trip_order_cursor = 0;
+    runtime->next_location_valid = false;
+}
+
+static size_t CurrentTripOrderIndex(const TravelRuntime *runtime)
+{
+    if (runtime->trip_order == NULL || runtime->trip_order_count == 0) {
+        return 0;
+    }
+
+    return runtime->trip_order[runtime->trip_order_cursor % runtime->trip_order_count];
+}
+
+static size_t SelectNextTripIndex(TravelRuntime *runtime)
+{
+    const size_t last_index = CurrentTripOrderIndex(runtime);
+
+    if (runtime->trip_order == NULL || runtime->trip_order_count == 0) {
+        return 0;
+    }
+
+    if ((runtime->trip_order_cursor + 1) < runtime->trip_order_count) {
+        runtime->trip_order_cursor++;
+        return runtime->trip_order[runtime->trip_order_cursor];
+    }
+
+    FillSequentialTripOrder(runtime);
+    ShuffleTripOrder(runtime->trip_order, runtime->trip_order_count);
+
+    if (runtime->trip_order_count > 1 && runtime->trip_order[0] == last_index) {
+        const size_t swap_index = (size_t)GetRandomValue(1, (int)runtime->trip_order_count - 1);
+        SwapSizeT(&runtime->trip_order[0], &runtime->trip_order[swap_index]);
+    }
+
+    runtime->trip_order_cursor = 0;
+    return runtime->trip_order[0];
+}
+
 static size_t FindLocationIndex(const char *name)
 {
     if ((name == NULL) || (name[0] == '\0')) {
@@ -728,6 +878,7 @@ static void BeginPage(TravelRuntime *runtime, size_t location_index, int page_in
     runtime->phase = TRIP_ZOOM_IN;
     runtime->phase_time = 0.0f;
     runtime->photo_alpha = 0.0f;
+    runtime->next_location_valid = false;
 
     LoadPhotoBankBlocking(&runtime->current_bank, location_index, page_index);
 }
@@ -752,7 +903,8 @@ static bool ReloadRuntimeTrips(TravelRuntime *runtime, RuntimeTravelConfig *acti
     *active_config = next_config;
     g_locations = active_config->locations;
     g_location_count = active_config->location_count;
-    BeginLocation(runtime, FindLocationIndex(start_name));
+    BuildTripOrderFromAnchor(runtime, FindLocationIndex(start_name));
+    BeginLocation(runtime, CurrentTripOrderIndex(runtime));
     fprintf(stderr, "travelpi: reloaded trips from %s\n", TRAVELPI_TRIPS_CONFIG_PATH);
     return true;
 }
@@ -762,6 +914,8 @@ static void ResetPhase(TravelRuntime *runtime, TripPhase next_phase)
     runtime->phase = next_phase;
     runtime->phase_time = 0.0f;
 }
+
+static bool IsLastPageForCurrentLocation(const TravelRuntime *runtime);
 
 static void UpdatePhase(TravelRuntime *runtime, float dt)
 {
@@ -786,6 +940,10 @@ static void UpdatePhase(TravelRuntime *runtime, float dt)
         case TRIP_HOLD:
             runtime->photo_alpha = 1.0f;
             if (runtime->phase_time >= location->hold_seconds) {
+                if (IsLastPageForCurrentLocation(runtime)) {
+                    runtime->next_location_index = SelectNextTripIndex(runtime);
+                    runtime->next_location_valid = true;
+                }
                 ResetPhase(runtime, TRIP_PHOTOS_OUT);
             }
             break;
@@ -807,7 +965,7 @@ static void UpdatePhase(TravelRuntime *runtime, float dt)
                 UnloadPhotoBank(&runtime->current_bank);
             }
             if (runtime->phase_time >= location->zoom_out_seconds) {
-                BeginLocation(runtime, runtime->location_index + 1);
+                BeginLocation(runtime, runtime->next_location_valid ? runtime->next_location_index : SelectNextTripIndex(runtime));
                 ResetPhase(runtime, TRIP_PHOTOS_IN);
             }
             break;
@@ -821,7 +979,8 @@ static void UpdateSmoothCamera(TravelRuntime *runtime, float dt)
     const TravelLocation *target_location = location;
 
     if (changing_locations) {
-        target_location = &g_locations[(runtime->location_index + 1) % g_location_count];
+        const size_t next_index = runtime->next_location_valid ? runtime->next_location_index : runtime->location_index;
+        target_location = &g_locations[next_index % g_location_count];
     }
 
     const Vector2 desired_target = ProjectGeoToMap(target_location, runtime->map.texture);
@@ -925,7 +1084,8 @@ static void UpdateVisibleMapTiles(TravelRuntime *runtime, int screen_width, int 
     }
 
     if (runtime->phase == TRIP_PHOTOS_OUT && IsLastPageForCurrentLocation(runtime)) {
-        const TravelLocation *next_location = &g_locations[(runtime->location_index + 1) % g_location_count];
+        const size_t next_index = runtime->next_location_valid ? runtime->next_location_index : runtime->location_index;
+        const TravelLocation *next_location = &g_locations[next_index % g_location_count];
         const Vector2 next_target = ProjectGeoToMap(next_location, runtime->map.texture);
         const MapTileRange next_range = MapTileRangeForView(
             runtime,
@@ -1156,12 +1316,16 @@ static void DrawOverlay(const TravelRuntime *runtime, int screen_width, int scre
     const int page_count = PageCountForLocation(location);
     const float band_height = BottomBandHeight(screen_height);
     const int title_size = (int)MaxFloat((float)screen_height*0.035f, 38.0f);
+    const int date_size = (int)MaxFloat((float)screen_height*0.025f, 25.0f);
     const int page_size = (int)MaxFloat((float)screen_height*0.029f, 30.0f);
     const int side_padding = (int)MaxFloat((float)screen_width*0.036f, 34.0f);
     const int band_y = (int)((float)screen_height - band_height);
     const float right_edge = (float)screen_width - (float)side_padding;
     const Vector2 title_metrics = MeasureBannerText(runtime, location->name, (float)title_size);
-    const float title_y = (float)band_y + (band_height - title_metrics.y)*0.5f;
+    const bool has_date = (location->date_label != NULL) && (location->date_label[0] != '\0');
+    const Vector2 date_metrics = has_date ? MeasureBannerText(runtime, location->date_label, (float)date_size) : (Vector2) { 0.0f, 0.0f };
+    const float left_group_height = has_date ? MaxFloat(title_metrics.y, date_metrics.y) : title_metrics.y;
+    const float title_y = (float)band_y + (band_height - left_group_height)*0.5f;
 
     page_label[0] = '\0';
     if (page_count > 1) {
@@ -1177,7 +1341,23 @@ static void DrawOverlay(const TravelRuntime *runtime, int screen_width, int scre
         DrawPaperTexture(runtime, band, 0.66f);
         DrawRectangleGradientV(0, band_y, screen_width, 18, (Color) { 83, 59, 31, 90 }, (Color) { 0, 0, 0, 0 });
         DrawLine(0, band_y, screen_width, band_y, Fade((Color) { 68, 48, 27, 255 }, 0.62f));
-        DrawBannerTextBold(runtime, location->name, (Vector2) { (float)side_padding, title_y }, (float)title_size, ink);
+        if (has_date) {
+            const float date_y = title_y + (title_metrics.y - date_metrics.y)*0.5f;
+            DrawBannerTextBoldInline(
+                runtime,
+                location->name,
+                location->date_label,
+                (float)side_padding,
+                title_y,
+                date_y,
+                (float)title_size,
+                (float)date_size,
+                MaxFloat((float)screen_width*0.010f, 14.0f),
+                ink,
+                Fade(ink, 0.80f));
+        } else {
+            DrawBannerTextBold(runtime, location->name, (Vector2) { (float)side_padding, title_y }, (float)title_size, ink);
+        }
 
         if (page_label[0] != '\0') {
             const Vector2 page_metrics = MeasureBannerText(runtime, page_label, (float)page_size);
@@ -1285,13 +1465,15 @@ int main(int argc, char **argv)
 
     runtime.paper = CreatePaperTexture();
     LoadMapTileMetadata(&runtime.tiles, runtime.map.texture);
+    SetRandomSeed((unsigned int)time(NULL) ^ (unsigned int)clock());
+    BuildTripOrderFromAnchor(&runtime, FindLocationIndex(options.start_name));
 
     runtime.macro_target = (Vector2) { (float)runtime.map.texture.width*0.5f, (float)runtime.map.texture.height*0.5f };
     runtime.macro_zoom = FitMapZoom(runtime.map.texture, screen_width, screen_height);
     runtime.camera.target = runtime.macro_target;
     runtime.camera.zoom = runtime.macro_zoom;
 
-    BeginLocation(&runtime, FindLocationIndex(options.start_name));
+    BeginLocation(&runtime, CurrentTripOrderIndex(&runtime));
     bool screenshot_taken = false;
     float app_time = 0.0f;
     float config_check_time = 0.0f;
@@ -1356,6 +1538,7 @@ int main(int argc, char **argv)
     }
 
     UnloadPhotoBank(&runtime.current_bank);
+    FreeTripOrder(&runtime);
     UnloadMapTileCache(&runtime.tiles);
     if (runtime.banner_font_loaded) {
         UnloadFont(runtime.banner_font);
