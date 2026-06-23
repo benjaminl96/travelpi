@@ -54,6 +54,14 @@ can render directly to the Linux graphics stack without X11 or Wayland.
 - Keeps memory pressure low by expecting pre-sized photo assets and only keeping
   the current page plus next page's photos resident.
 
+## Screenshots
+
+The older screenshot is the admin portal; the newer one is the kiosk display.
+
+| Admin Portal | Kiosk Display |
+| --- | --- |
+| ![Admin portal](docs/screenshots/admin-portal.png) | ![Kiosk display](docs/screenshots/kiosk-display.png) |
+
 ## Personal Data
 
 This repository tracks the code, scripts, fonts, the example manifest, and the
