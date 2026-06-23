@@ -56,8 +56,6 @@ can render directly to the Linux graphics stack without X11 or Wayland.
 
 ## Screenshots
 
-The older screenshot is the admin portal; the newer one is the kiosk display.
-
 | Admin Portal | Kiosk Display |
 | --- | --- |
 | ![Admin portal](docs/screenshots/admin-portal.png) | ![Kiosk display](docs/screenshots/kiosk-display.png) |
