@@ -6,6 +6,10 @@ sudo apt-get install -y \
   build-essential \
   cmake \
   git \
+  libheif-examples \
+  libheif-plugin-aomdec \
+  libheif-plugin-libde265 \
+  libimage-exiftool-perl \
   libasound2-dev \
   libdrm-dev \
   libegl1-mesa-dev \

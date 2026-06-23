@@ -15,10 +15,8 @@ DEFAULTS = {
 }
 
 DEFAULT_PHOTO_LAYOUT = [
-    {"anchor": [0.42, 0.31], "scale": 0.20, "rotation": -7.0, "drift": 0.4},
-    {"anchor": [0.56, 0.28], "scale": 0.19, "rotation": 6.0, "drift": 1.5},
-    {"anchor": [0.50, 0.53], "scale": 0.21, "rotation": -2.0, "drift": 2.6},
-    {"anchor": [0.61, 0.52], "scale": 0.18, "rotation": 4.0, "drift": 3.2},
+    {"anchor": [0.30, 0.48], "scale": 0.42, "rotation": -3.0, "drift": 0.4},
+    {"anchor": [0.70, 0.48], "scale": 0.42, "rotation": 3.0, "drift": 1.5},
 ]
 
 
@@ -68,6 +66,13 @@ def date_label(trip: dict) -> str:
         return format_date(start)
 
     return ""
+
+
+def trip_sort_key(trip: dict):
+    start = str(trip.get("start_date") or "")
+    end = str(trip.get("end_date") or start)
+    name = str(trip.get("name") or "").casefold()
+    return (0 if start else 1, start, end, name)
 
 
 def photo_with_defaults(photo: dict, index: int) -> dict:
@@ -131,7 +136,7 @@ def emit_trip(trip: dict, photo_symbol: str) -> list[str]:
 
 def generate(manifest_path: Path, output_path: Path):
     manifest = json.loads(manifest_path.read_text())
-    trips = manifest.get("trips", [])
+    trips = sorted(manifest.get("trips", []), key=trip_sort_key)
 
     if not trips:
         raise ValueError("manifest has no trips")
@@ -163,6 +168,7 @@ def generate(manifest_path: Path, output_path: Path):
         "",
     ])
 
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text("\n".join(lines))
 
 

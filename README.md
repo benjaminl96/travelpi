@@ -99,7 +99,7 @@ center from the median GPS coordinates, copies every readable still image into
 `assets/source/photos/`, appends `config/trips.json`, regenerates
 `src/travel_config.c`, and optionally runs the 1080p preparation step. At
 runtime, each trip is rendered as as many print-style gallery pages as needed,
-with up to six photos resident per page. Pages hold for 15 seconds by default
+with up to two photos resident per page. Pages hold for 15 seconds by default
 and page-to-page fades are intentionally quick.
 
 Trip names and captions are human-supplied because EXIF reliably gives capture
@@ -144,15 +144,28 @@ python3 scripts/prepare_assets.py --width 1920
 ```
 
 The script resizes each configured photo to the exact long-edge size implied by
-its `PhotoSpec.scale` at 1920px, with a default minimum long edge of 1280px for
+its `PhotoSpec.scale` at 1920px, with a default minimum long edge of 1600px for
 the non-overlapping gallery layout, and writes the prepared files into
 `assets/photos/`. When `.asset-cache/bin/qoiconv` exists, it also writes sibling
 QOI files for faster runtime decode. It prepares a Pi-friendly base map at
 `assets/maps/world_map.png` and cuts `assets/maps/tiles/` into 512px close-zoom
 tiles. The app draws the base map for macro views, then loads only visible tiles
 near the camera for sharper close zooms. If `assets/source/maps/world_map_highres.*`
-exists, tile prep uses it while keeping the base map capped. QOI files are
-generated when `qoiconv` is available; the app falls back to PNG/JPEG.
+exists, tile prep uses it while keeping the base map capped. If Natural Earth
+boundary zip files are present locally, map prep overlays country and
+state/province borders onto both the base map and high-resolution tiles. QOI
+files are generated when `qoiconv` is available; the app falls back to PNG/JPEG.
+
+To convert existing trips to the current two-photo, larger-image layout, keep
+your existing `config/trips.json` and source photos in place, then run:
+
+```sh
+python3 scripts/prepare_assets.py --photos-only
+```
+
+The runtime page split changes automatically because it is controlled by the app
+constant, and the prep script regenerates any prepared photo whose long edge is
+below the current 1600px target.
 
 ## Admin Web UI
 
@@ -210,6 +223,16 @@ cp .asset-cache/naturalearth/NE2_HR_LC_SR_W.README.html \
 ./scripts/build_qoiconv.sh
 python3 scripts/prepare_assets.py --map-only
 ```
+
+For country and state/province borders, fetch Natural Earth's 1:10m cultural
+boundary lines once, then prepare the map:
+
+```sh
+python3 scripts/prepare_assets.py --download-map-boundaries --map-only
+```
+
+The boundary zips are cached in `.asset-cache/naturalearth/` and are reused on
+later `--map-only` runs.
 
 Expected local sizes are roughly 320 MB for the zip, 677 MB for
 `world_map_highres.tif`, and a few hundred MB for the generated 512px tile set,

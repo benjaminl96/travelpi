@@ -1,11 +1,11 @@
 [Unit]
 Description=travelpi DRM/KMS kiosk
-After=multi-user.target systemd-user-sessions.service
+After=systemd-user-sessions.service
 Conflicts=getty@tty1.service
 
 [Service]
 Type=simple
-User=pi
+User=benlee
 SupplementaryGroups=video render
 WorkingDirectory=/opt/travelpi
 Environment=TRAVELPI_ASSET_ROOT=/opt/travelpi

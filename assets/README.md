@@ -37,6 +37,6 @@ Memory notes:
   License; see `assets/fonts/LibreBaskerville-OFL.txt`.
 - A 4096x2048 RGBA map consumes about 32 MiB of GPU memory after upload.
 - Photos should be prepared before upload. The helper currently uses a default
-  minimum 1280px long edge so large non-overlapping gallery cells stay sharp.
+  minimum 1600px long edge so large non-overlapping gallery cells stay sharp.
 - A trip can contain any number of photos. The runtime renders them as pages of
-  up to six photos, keeping only the current and next page's textures resident.
+  up to two photos, keeping only the current page's textures resident.

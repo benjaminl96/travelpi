@@ -19,13 +19,17 @@ except ModuleNotFoundError as exc:
         "`./scripts/install_pi_deps.sh` on Raspberry Pi OS."
     ) from exc
 
+try:
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+except ImportError:
+    pass
+
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".heic", ".heif"}
 DEFAULT_LAYOUT = [
-    {"anchor": [0.42, 0.31], "scale": 0.20, "rotation": -7.0, "drift": 0.4},
-    {"anchor": [0.56, 0.28], "scale": 0.19, "rotation": 6.0, "drift": 1.5},
-    {"anchor": [0.50, 0.53], "scale": 0.21, "rotation": -2.0, "drift": 2.6},
-    {"anchor": [0.61, 0.52], "scale": 0.18, "rotation": 4.0, "drift": 3.2},
+    {"anchor": [0.30, 0.48], "scale": 0.42, "rotation": -3.0, "drift": 0.4},
+    {"anchor": [0.70, 0.48], "scale": 0.42, "rotation": 3.0, "drift": 1.5},
 ]
 
 
@@ -82,6 +86,23 @@ def exif_datetime(exif) -> datetime | None:
     return None
 
 
+def parse_datetime(value) -> datetime | None:
+    if not value:
+        return None
+
+    text = str(value).strip()
+    text = re.sub(r"([+-]\d{2}:?\d{2}|Z)$", "", text).strip()
+    text = text.split(".", 1)[0]
+
+    for fmt in ("%Y:%m:%d %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+
+    return None
+
+
 def exif_gps(exif) -> tuple[float, float] | tuple[None, None]:
     gps = exif.get_ifd(34853) if hasattr(exif, "get_ifd") else exif.get(34853)
 
@@ -120,6 +141,62 @@ def mdls_value(path: Path, key: str) -> str | None:
     return None if value in ("", "(null)") else value
 
 
+def numeric_value(value) -> float | None:
+    if value in (None, ""):
+        return None
+
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def read_candidate_with_exiftool(path: Path) -> PhotoCandidate | None:
+    exiftool = shutil.which("exiftool")
+
+    if exiftool is None:
+        return None
+
+    try:
+        result = subprocess.run(
+            [
+                exiftool,
+                "-json",
+                "-n",
+                "-DateTimeOriginal",
+                "-CreateDate",
+                "-MediaCreateDate",
+                "-GPSLatitude",
+                "-GPSLongitude",
+                str(path),
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        records = json.loads(result.stdout)
+    except (subprocess.CalledProcessError, FileNotFoundError, json.JSONDecodeError):
+        return None
+
+    if not records:
+        return None
+
+    record = records[0]
+    captured_at = (
+        parse_datetime(record.get("DateTimeOriginal")) or
+        parse_datetime(record.get("CreateDate")) or
+        parse_datetime(record.get("MediaCreateDate"))
+    )
+    latitude = numeric_value(record.get("GPSLatitude"))
+    longitude = numeric_value(record.get("GPSLongitude"))
+
+    if captured_at is None and latitude is None and longitude is None:
+        return None
+
+    return PhotoCandidate(path, captured_at, latitude, longitude)
+
+
 def read_candidate_with_mdls(path: Path) -> PhotoCandidate | None:
     lat_raw = mdls_value(path, "kMDItemLatitude")
     lon_raw = mdls_value(path, "kMDItemLongitude")
@@ -129,18 +206,11 @@ def read_candidate_with_mdls(path: Path) -> PhotoCandidate | None:
     longitude = None
 
     if date_raw:
-        try:
-            captured_at = datetime.strptime(date_raw.rsplit(" ", 1)[0], "%Y-%m-%d %H:%M:%S")
-        except ValueError:
-            captured_at = None
+        captured_at = parse_datetime(date_raw.rsplit(" ", 1)[0])
 
     if lat_raw and lon_raw:
-        try:
-            latitude = float(lat_raw)
-            longitude = float(lon_raw)
-        except ValueError:
-            latitude = None
-            longitude = None
+        latitude = numeric_value(lat_raw)
+        longitude = numeric_value(lon_raw)
 
     if captured_at is None and latitude is None and longitude is None:
         return None
@@ -149,6 +219,11 @@ def read_candidate_with_mdls(path: Path) -> PhotoCandidate | None:
 
 
 def read_candidate(path: Path) -> PhotoCandidate | None:
+    candidate = read_candidate_with_exiftool(path)
+
+    if candidate is not None:
+        return candidate
+
     try:
         with Image.open(path) as image:
             exif = image.getexif()
@@ -216,6 +291,9 @@ def choose_photos(candidates: list[PhotoCandidate], count: int | None) -> list[P
     if count is None or len(ordered) <= count:
         return ordered
 
+    if count <= 1:
+        return ordered[:max(count, 0)]
+
     chosen = []
 
     for index in range(count):
@@ -226,25 +304,43 @@ def choose_photos(candidates: list[PhotoCandidate], count: int | None) -> list[P
 
 
 def copy_as_jpeg(source: Path, dest: Path, quality: int):
-    if source.suffix.lower() in (".heic", ".heif"):
+    is_heif = source.suffix.lower() in (".heic", ".heif")
+
+    try:
+        with Image.open(source) as image:
+            image = ImageOps.exif_transpose(image).convert("RGB")
+            image.load()
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            image.save(dest, quality=quality, optimize=True, progressive=False)
+            return
+    except Exception:
+        if not is_heif:
+            raise
+
+    if is_heif:
         sips = shutil.which("sips")
 
-        if sips is None:
-            raise SystemExit(f"cannot convert {source}: sips not found")
-
         dest.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(
-            [sips, "-s", "format", "jpeg", "-s", "formatOptions", str(quality), str(source), "--out", str(dest)],
-            check=True,
-            stdout=subprocess.DEVNULL,
-        )
-        return
 
-    with Image.open(source) as image:
-        image = ImageOps.exif_transpose(image).convert("RGB")
-        image.load()
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        image.save(dest, quality=quality, optimize=True, progressive=False)
+        if sips is not None:
+            subprocess.run(
+                [sips, "-s", "format", "jpeg", "-s", "formatOptions", str(quality), str(source), "--out", str(dest)],
+                check=True,
+                stdout=subprocess.DEVNULL,
+            )
+            return
+
+        heif_convert = shutil.which("heif-convert")
+
+        if heif_convert is not None:
+            subprocess.run(
+                [heif_convert, "-q", str(quality), str(source), str(dest)],
+                check=True,
+                stdout=subprocess.DEVNULL,
+            )
+            return
+
+    raise RuntimeError(f"cannot convert {source}: install pillow-heif, sips, or heif-convert")
 
 
 def load_manifest(path: Path) -> dict:
@@ -256,7 +352,22 @@ def load_manifest(path: Path) -> dict:
 
 def save_manifest(path: Path, manifest: dict):
     path.parent.mkdir(parents=True, exist_ok=True)
+    sort_manifest_trips(manifest)
     path.write_text(json.dumps(manifest, indent=2) + "\n")
+
+
+def trip_sort_key(trip: dict):
+    start = str(trip.get("start_date") or "")
+    end = str(trip.get("end_date") or start)
+    name = str(trip.get("name") or "").casefold()
+    return (0 if start else 1, start, end, name)
+
+
+def sort_manifest_trips(manifest: dict):
+    trips = manifest.get("trips")
+    if isinstance(trips, list):
+        trips.sort(key=trip_sort_key)
+    return manifest
 
 
 def append_trip(manifest: dict, trip: dict, replace: bool):

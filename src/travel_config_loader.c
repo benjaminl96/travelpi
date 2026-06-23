@@ -39,10 +39,8 @@ struct JsonValue {
 };
 
 static const PhotoSpec DEFAULT_LAYOUT[] = {
-    { NULL, { 0.42f, 0.31f }, 0.20f, -7.0f, 0.4f },
-    { NULL, { 0.56f, 0.28f }, 0.19f, 6.0f, 1.5f },
-    { NULL, { 0.50f, 0.53f }, 0.21f, -2.0f, 2.6f },
-    { NULL, { 0.61f, 0.52f }, 0.18f, 4.0f, 3.2f },
+    { NULL, { 0.30f, 0.48f }, 0.42f, -3.0f, 0.4f },
+    { NULL, { 0.70f, 0.48f }, 0.42f, 3.0f, 1.5f },
 };
 
 static char *DuplicateString(const char *value)

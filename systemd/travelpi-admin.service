@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=pi
+User=benlee
 WorkingDirectory=/opt/travelpi
 Environment=TRAVELPI_ADMIN_HOST=0.0.0.0
 Environment=TRAVELPI_ADMIN_PORT=8080

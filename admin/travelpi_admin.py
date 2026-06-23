@@ -6,6 +6,7 @@ import os
 import re
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -56,6 +57,12 @@ DEFAULT_TRIP = {
     "fade_seconds": 0.45,
     "zoom_out_seconds": 2.05,
 }
+BOUNDARY_MAP_SOURCES = [
+    SOURCE_MAP_ROOT / "ne_10m_admin_0_boundary_lines_land.zip",
+    SOURCE_MAP_ROOT / "ne_10m_admin_1_states_provinces_lines.zip",
+    ROOT / ".asset-cache/naturalearth/ne_10m_admin_0_boundary_lines_land.zip",
+    ROOT / ".asset-cache/naturalearth/ne_10m_admin_1_states_provinces_lines.zip",
+]
 
 
 def now_label():
@@ -73,13 +80,28 @@ def ensure_manifest():
         MANIFEST_PATH.write_text(json.dumps({"trips": []}, indent=2) + "\n")
 
 
+def trip_sort_key(trip):
+    start = str(trip.get("start_date") or "")
+    end = str(trip.get("end_date") or start)
+    name = str(trip.get("name") or "").casefold()
+    return (0 if start else 1, start, end, name)
+
+
+def sort_manifest_trips(manifest):
+    trips = manifest.get("trips")
+    if isinstance(trips, list):
+        trips.sort(key=trip_sort_key)
+    return manifest
+
+
 def load_manifest():
     ensure_manifest()
-    return json.loads(MANIFEST_PATH.read_text())
+    return sort_manifest_trips(json.loads(MANIFEST_PATH.read_text()))
 
 
 def save_manifest(manifest):
     MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
+    sort_manifest_trips(manifest)
     with tempfile.NamedTemporaryFile("w", delete=False, dir=str(MANIFEST_PATH.parent), prefix=".trips.", suffix=".json") as handle:
         json.dump(manifest, handle, indent=2)
         handle.write("\n")
@@ -155,12 +177,17 @@ def normalize_trip(raw):
     return trip
 
 
-def next_photo_filename(slug, index):
-    SOURCE_PHOTO_ROOT.mkdir(parents=True, exist_ok=True)
-    candidate = SOURCE_PHOTO_ROOT / f"{slug}_{index:02d}.jpg"
+def prepared_photo_suffix(file_item):
+    suffix = Path(file_item.get("filename") or "").suffix.lower()
+    return suffix if suffix in (".jpg", ".jpeg", ".png") else ".png"
+
+
+def next_photo_filename(root, slug, index, suffix=".jpg"):
+    root.mkdir(parents=True, exist_ok=True)
+    candidate = root / f"{slug}_{index:02d}{suffix}"
     while candidate.exists():
         index += 1
-        candidate = SOURCE_PHOTO_ROOT / f"{slug}_{index:02d}.jpg"
+        candidate = root / f"{slug}_{index:02d}{suffix}"
     return candidate
 
 
@@ -249,14 +276,18 @@ def map_asset_status():
     wants_qoi = qoiconv_available()
     source_time = mtime(source)
     highres_time = newest_existing(highres_sources)
+    boundary_time = newest_existing(BOUNDARY_MAP_SOURCES)
 
     if source.exists() and (not map_png.exists() or source_time > mtime(map_png)):
         reasons.append("Base map needs preparing")
 
+    if boundary_time > 0 and (not map_png.exists() or boundary_time > mtime(map_png)):
+        reasons.append("Boundary overlay needs preparing")
+
     if wants_qoi and map_png.exists() and (not map_qoi.exists() or mtime(map_png) > mtime(map_qoi)):
         reasons.append("Base map QOI needs updating")
 
-    if highres_time > 0 and (not tiles_meta.exists() or highres_time > mtime(tiles_meta)):
+    if max(highres_time, boundary_time) > 0 and (not tiles_meta.exists() or max(highres_time, boundary_time) > mtime(tiles_meta)):
         reasons.append("High-resolution map tiles need preparing")
 
     return {
@@ -418,6 +449,34 @@ def temp_upload(file_item):
     return Path(handle.name)
 
 
+def files_for_field(files, field):
+    return [file_item for file_item in files if file_item.get("field") == field]
+
+
+def save_prepared_upload(file_item, dest):
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(delete=False, dir=str(dest.parent), prefix=f".{dest.stem}.", suffix=dest.suffix) as handle:
+        handle.write(file_item["content"])
+        temp_name = handle.name
+    Path(temp_name).replace(dest)
+
+
+def parse_json_field(fields, name, expected_type):
+    raw = fields.get(name)
+    if not raw:
+        raise ValueError(f"Browser did not send {name}.")
+
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid {name}.") from exc
+
+    if not isinstance(value, expected_type):
+        raise ValueError(f"Invalid {name}.")
+
+    return value
+
+
 def candidates_from_uploads(files):
     candidates = []
     temp_paths = []
@@ -441,50 +500,40 @@ def cleanup(paths):
             pass
 
 
-def build_import_trip(fields, files):
-    name = fields.get("name", "").strip()
-    if not name:
-        raise ValueError("Trip name is required.")
+def build_prepared_import_trip(fields, files):
     if not files:
         raise ValueError("Upload at least one image.")
 
-    candidates, temp_paths = candidates_from_uploads(files)
-    try:
-        gps_candidates = [c for c in candidates if c.latitude is not None and c.longitude is not None]
-        if fields.get("lat") and fields.get("lon"):
-            latitude = float(fields["lat"])
-            longitude = float(fields["lon"])
-        elif gps_candidates:
-            latitude = median([c.latitude for c in gps_candidates if c.latitude is not None])
-            longitude = median([c.longitude for c in gps_candidates if c.longitude is not None])
-        else:
-            raise ValueError("No GPS EXIF found; enter latitude and longitude.")
+    trip = parse_json_field(fields, "trip_definition", dict)
+    photo_definitions = trip.get("photos")
+    if not isinstance(photo_definitions, list) or len(photo_definitions) != len(files):
+        raise ValueError("Browser trip definition did not match uploaded photos.")
 
-        start_date, end_date = trip_date_range(candidates)
-        slug = slugify(fields.get("slug") or name)
-        photos = []
+    name = str(trip.get("name") or "").strip()
+    if not name:
+        raise ValueError("Trip name is required.")
 
-        for index, candidate in enumerate(candidates, start=1):
-            dest = next_photo_filename(slug, index)
-            copy_as_jpeg(candidate.path, dest, 92)
-            photos.append(default_photo(len(photos), f"assets/photos/{dest.name}"))
+    slug = slugify(fields.get("slug") or name)
+    photos = []
 
-        trip = normalize_trip({
-            "name": name,
-            "caption": fields.get("caption") or name,
-            "geo": {
-                "latitude": latitude,
-                "longitude": longitude,
-            },
-            "close_zoom": fields.get("close_zoom") or DEFAULT_TRIP["close_zoom"],
-            "hold_seconds": fields.get("hold_seconds") or DEFAULT_TRIP["hold_seconds"],
-            "fade_seconds": fields.get("fade_seconds") or DEFAULT_TRIP["fade_seconds"],
-            "photos": photos,
-            **({"start_date": start_date, "end_date": end_date} if start_date else {}),
-        })
-        return trip, len(gps_candidates), len(candidates)
-    finally:
-        cleanup(temp_paths)
+    for index, file_item in enumerate(files, start=1):
+        dest = next_photo_filename(PREPARED_PHOTO_ROOT, slug, index, prepared_photo_suffix(file_item))
+        save_prepared_upload(file_item, dest)
+        photo = dict(photo_definitions[index - 1])
+        photo["path"] = f"assets/photos/{dest.name}"
+        photos.append(photo)
+
+    trip["photos"] = photos
+    return normalize_trip(trip), int(fields.get("gps_count") or 0), len(files), len(files)
+
+
+def build_import_trip(fields, files):
+    original_files = files_for_field(files, "photos")
+
+    if fields.get("browser_prepared") == "1":
+        return build_prepared_import_trip(fields, original_files)
+
+    raise ValueError("Browser-prepared trip definitions are required.")
 
 
 def append_or_replace_trip(trip, replace_index=None):
@@ -493,51 +542,65 @@ def append_or_replace_trip(trip, replace_index=None):
         trips = manifest.setdefault("trips", [])
         if replace_index is None:
             trips.append(trip)
-            index = len(trips) - 1
         else:
             index = int(replace_index)
             if index < 0 or index >= len(trips):
                 raise IndexError("trip index out of range")
             trips[index] = trip
         save_manifest(manifest)
+        index = trip_index_for(manifest, trip)
     return index
 
 
-def add_photos_to_trip(index, files):
+def trip_index_for(manifest, trip):
+    trips = manifest.get("trips", [])
+    identity_match = next((i for i, candidate in enumerate(trips) if candidate is trip), None)
+    if identity_match is not None:
+        return identity_match
+    return next(
+        (i for i, candidate in enumerate(trips) if candidate.get("name") == trip.get("name")),
+        max(0, len(trips) - 1),
+    )
+
+
+def add_prepared_photos_to_trip(index, fields, files):
     if not files:
         raise ValueError("Upload at least one image.")
 
-    candidates, temp_paths = candidates_from_uploads(files)
-    try:
-        with MANIFEST_LOCK:
-            manifest = load_manifest()
-            trips = manifest.setdefault("trips", [])
-            trip = trips[int(index)]
-            slug = slugify(trip["name"])
-            photos = trip.setdefault("photos", [])
-            gps_candidates = [c for c in candidates if c.latitude is not None and c.longitude is not None]
-            start_date, end_date = trip_date_range(candidates)
+    photo_definitions = parse_json_field(fields, "photo_definitions", list)
+    if len(photo_definitions) != len(files):
+        raise ValueError("Browser photo definitions did not match uploaded photos.")
 
-            for offset, candidate in enumerate(candidates, start=len(photos) + 1):
-                dest = next_photo_filename(slug, offset)
-                copy_as_jpeg(candidate.path, dest, 92)
-                photos.append(default_photo(len(photos), f"assets/photos/{dest.name}"))
+    with MANIFEST_LOCK:
+        manifest = load_manifest()
+        trips = manifest.setdefault("trips", [])
+        trip = trips[int(index)]
+        slug = slugify(trip["name"])
+        photos = trip.setdefault("photos", [])
 
-            if gps_candidates and (not trip.get("geo") or not trip["geo"].get("latitude") or not trip["geo"].get("longitude")):
-                trip["geo"] = {
-                    "latitude": round(median([c.latitude for c in gps_candidates if c.latitude is not None]), 6),
-                    "longitude": round(median([c.longitude for c in gps_candidates if c.longitude is not None]), 6),
-                }
-            if start_date and not trip.get("start_date"):
-                trip["start_date"] = start_date
-                trip["end_date"] = end_date
+        for file_index, file_item in enumerate(files):
+            offset = len(photos) + 1
+            dest = next_photo_filename(PREPARED_PHOTO_ROOT, slug, offset, prepared_photo_suffix(file_item))
+            save_prepared_upload(file_item, dest)
+            photo = dict(photo_definitions[file_index])
+            photo["path"] = f"assets/photos/{dest.name}"
+            photos.append(photo)
 
-            trips[int(index)] = normalize_trip(trip)
-            save_manifest(manifest)
+        trip = normalize_trip(trip)
+        trips[int(index)] = trip
+        save_manifest(manifest)
+        index = trip_index_for(manifest, trip)
 
-        return len(candidates), len(gps_candidates)
-    finally:
-        cleanup(temp_paths)
+    return len(files), int(fields.get("gps_count") or 0), len(files), index
+
+
+def add_photos_to_trip(index, fields, files):
+    original_files = files_for_field(files, "photos")
+
+    if fields.get("browser_prepared") == "1":
+        return add_prepared_photos_to_trip(index, fields, original_files)
+
+    raise ValueError("Browser-prepared photos are required.")
 
 
 def public_trip(trip):
@@ -627,21 +690,27 @@ class AdminHandler(BaseHTTPRequestHandler):
         try:
             if path == "/api/import":
                 fields, files = multipart_parts(self)
-                trip, gps_count, total = build_import_trip(fields, files)
+                trip, gps_count, total, prepared_count = build_import_trip(fields, files)
                 index = append_or_replace_trip(trip)
                 self.send_json({
                     "trip": public_trip(trip),
                     "index": index,
                     "gps_count": gps_count,
                     "photo_count": total,
+                    "prepared_count": prepared_count,
                 }, HTTPStatus.CREATED)
                 return
 
             match = re.fullmatch(r"/api/trips/(\d+)/photos", path)
             if match:
                 fields, files = multipart_parts(self)
-                count, gps_count = add_photos_to_trip(int(match.group(1)), files)
-                self.send_json({"photo_count": count, "gps_count": gps_count}, HTTPStatus.CREATED)
+                count, gps_count, prepared_count, index = add_photos_to_trip(int(match.group(1)), fields, files)
+                self.send_json({
+                    "photo_count": count,
+                    "gps_count": gps_count,
+                    "prepared_count": prepared_count,
+                    "index": index,
+                }, HTTPStatus.CREATED)
                 return
 
             if path == "/api/trips":
@@ -701,7 +770,12 @@ class AdminHandler(BaseHTTPRequestHandler):
 
 
 class AdminServer(ThreadingHTTPServer):
+    allow_reuse_address = True
+
     def server_bind(self):
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if hasattr(socket, "SO_REUSEPORT"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
         self.socket.bind(self.server_address)
         self.server_address = self.socket.getsockname()
         self.server_name = str(self.server_address[0])

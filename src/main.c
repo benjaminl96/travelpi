@@ -1000,13 +1000,13 @@ static void DrawPhotoCollage(const TravelRuntime *runtime, int screen_width, int
     }
 
     const int count = runtime->current_bank.target_count;
-    const float bottom_band_height = MaxFloat((float)screen_height*0.14f, 128.0f);
-    const float rail = (float)MinFloat((float)screen_width, (float)screen_height)*0.035f;
-    const float gap = MaxFloat((float)screen_width*0.026f, 30.0f);
-    const float top = rail + gap*0.70f;
-    const float left = rail + gap*0.70f;
-    const float right = (float)screen_width - rail - gap*0.70f;
-    const float bottom = (float)screen_height - bottom_band_height - gap*0.95f;
+    const float bottom_band_height = MaxFloat((float)screen_height*0.090f, 92.0f);
+    const float rail = (float)MinFloat((float)screen_width, (float)screen_height)*0.026f;
+    const float gap = MaxFloat((float)screen_width*0.018f, 22.0f);
+    const float top = rail + gap*0.38f;
+    const float left = rail + gap*0.42f;
+    const float right = (float)screen_width - rail - gap*0.42f;
+    const float bottom = (float)screen_height - bottom_band_height - gap*0.46f;
     const float width = right - left;
     const float height = bottom - top;
     const Rectangle grid_area = { left, top, width, height };
@@ -1091,14 +1091,14 @@ static void DrawOverlay(const TravelRuntime *runtime, int screen_width, int scre
     const TravelLocation *location = CurrentLocation(runtime);
     char caption[128];
     const int page_count = PageCountForLocation(location);
-    const float band_height = MaxFloat((float)screen_height*0.14f, 128.0f);
-    const int title_size = (int)MaxFloat((float)screen_height*0.042f, 36.0f);
-    const int date_size = (int)MaxFloat((float)screen_height*0.024f, 21.0f);
-    const int caption_size = (int)MaxFloat((float)screen_height*0.022f, 19.0f);
+    const float band_height = MaxFloat((float)screen_height*0.090f, 92.0f);
+    const int title_size = (int)MaxFloat((float)screen_height*0.032f, 30.0f);
+    const int date_size = (int)MaxFloat((float)screen_height*0.018f, 18.0f);
+    const int caption_size = (int)MaxFloat((float)screen_height*0.018f, 18.0f);
     const int x = (int)MaxFloat((float)screen_width*0.036f, 34.0f);
     const int right_padding = x;
     const int band_y = (int)((float)screen_height - band_height);
-    const int y = band_y + (int)MaxFloat(band_height*0.13f, 14.0f);
+    const int y = band_y + (int)MaxFloat(band_height*0.10f, 9.0f);
 
     caption[0] = '\0';
     if (page_count > 1) {
@@ -1126,7 +1126,7 @@ static void DrawOverlay(const TravelRuntime *runtime, int screen_width, int scre
             DrawBannerText(
                 runtime,
                 location->date_label,
-                (Vector2) { (float)x, (float)y + (float)title_size + 10.0f },
+                (Vector2) { (float)x, (float)y + (float)title_size + 5.0f },
                 (float)date_size,
                 Fade(muted_ink, 0.92f));
         }

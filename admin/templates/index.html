@@ -20,7 +20,6 @@
     <section class="workspace">
       <nav class="tabs">
         <button class="tab active" data-tab="edit">Trip</button>
-        <button class="tab" data-tab="import">Import</button>
         <button class="tab" data-tab="jobs">Jobs</button>
         <span class="prep-actions" id="prepActions">
           <button id="preparePhotos" hidden>Prepare photos</button>
@@ -29,6 +28,7 @@
         </span>
         <button id="restartDisplay">Restart display</button>
       </nav>
+      <div class="workflow-status" id="workflowStatus" hidden></div>
 
       <section class="panel active" id="editPanel">
         <form id="tripForm" class="grid-form">
@@ -53,14 +53,19 @@
 
         <div class="dropzone" id="photoDrop">
           <input id="photoUpload" type="file" accept="image/*,.heic,.heif" multiple>
-          <strong>Upload photos to selected trip</strong>
-          <span>Drop images here or choose files.</span>
+          <strong>Add photos to this trip</strong>
+          <span>Drop images here or choose files. They upload and prepare automatically.</span>
         </div>
+        <div class="file-summary" id="photoUploadStatus"></div>
 
         <div class="photo-grid" id="photoGrid"></div>
       </section>
 
       <section class="panel" id="importPanel">
+        <div class="flow-header">
+          <strong>New trip</strong>
+          <span id="importReadiness">Name the trip and add photos to continue.</span>
+        </div>
         <form id="importForm" class="grid-form">
           <label>Name<input name="name" required></label>
           <label>Caption<input name="caption"></label>
@@ -73,11 +78,13 @@
         </form>
         <div class="dropzone" id="importDrop">
           <input id="importUpload" type="file" accept="image/*,.heic,.heif" multiple>
-          <strong>Create trip from photos</strong>
-          <span>EXIF GPS/date will be used when present.</span>
+          <strong>Add photos for this trip</strong>
+          <span>Drop images here or choose files. GPS/date are read from EXIF when present.</span>
         </div>
-        <div class="actions">
-          <button class="primary" id="importTrip">Import trip</button>
+        <div class="file-summary" id="importSummary"></div>
+        <div class="actions sticky-actions">
+          <button class="primary" id="importTrip" disabled>Choose photos first</button>
+          <button id="clearImport" hidden>Clear photos</button>
         </div>
       </section>
 
@@ -88,6 +95,8 @@
   </main>
 
   <div class="toast" id="toast"></div>
+  <script src="/static/exifr.full.umd.js"></script>
+  <script src="/static/heic-to.iife.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

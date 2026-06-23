@@ -4,6 +4,9 @@ import json
 import re
 import shutil
 import subprocess
+import struct
+import urllib.request
+import zipfile
 from pathlib import Path
 
 try:
@@ -23,6 +26,18 @@ PHOTO_PATTERN = re.compile(
     r'\{\s*[-0-9.]+f?\s*,\s*[-0-9.]+f?\s*\}\s*,\s*'
     r'(?P<scale>[-0-9.]+)f?'
 )
+BOUNDARY_SOURCES = {
+    "country": {
+        "archive": "ne_10m_admin_0_boundary_lines_land.zip",
+        "shape": "ne_10m_admin_0_boundary_lines_land.shp",
+        "url": "https://naturalearth.s3.amazonaws.com/10m_cultural/ne_10m_admin_0_boundary_lines_land.zip",
+    },
+    "state": {
+        "archive": "ne_10m_admin_1_states_provinces_lines.zip",
+        "shape": "ne_10m_admin_1_states_provinces_lines.shp",
+        "url": "https://naturalearth.s3.amazonaws.com/10m_cultural/ne_10m_admin_1_states_provinces_lines.zip",
+    },
+}
 
 
 def repo_root() -> Path:
@@ -72,8 +87,36 @@ def configured_photos(root: Path):
         yield from configured_photos_from_c(root / "src/travel_config.c")
 
 
+def file_mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except FileNotFoundError:
+        return 0.0
+
+
+def photo_needs_prepare(source: Path, dest: Path, long_edge: int) -> bool:
+    if not dest.exists():
+        return True
+
+    try:
+        if source.resolve() == dest.resolve():
+            return False
+    except FileNotFoundError:
+        return True
+
+    if file_mtime(source) > file_mtime(dest):
+        return True
+
+    try:
+        with Image.open(dest) as image:
+            return max(image.size) < long_edge
+    except OSError:
+        return True
+
+
 def save_prepared_photo(source: Path, dest: Path, long_edge: int, quality: int):
     with Image.open(source) as image:
+        image.draft("RGB", (long_edge * 2, long_edge * 2))
         image = ImageOps.exif_transpose(image).convert("RGB")
         image.load()
         width, height = image.size
@@ -113,6 +156,10 @@ def prepare_photos(root: Path, width: int, quality: int, photo_long_edge: int):
             continue
 
         long_edge = max(1, round(width * scale), photo_long_edge)
+
+        if not photo_needs_prepare(source, dest, long_edge):
+            continue
+
         save_prepared_photo(source, dest, long_edge, quality)
         print(f"photo {dest.relative_to(root)} long_edge={long_edge}")
 
@@ -181,6 +228,153 @@ def grade_map_image(image):
     return Image.merge("RGB", (r, g, b))
 
 
+def boundary_archive_path(root: Path, source: dict) -> Path:
+    cache_path = root / ".asset-cache/naturalearth" / source["archive"]
+    local_path = root / "assets/source/maps" / source["archive"]
+    return local_path if local_path.exists() else cache_path
+
+
+def download_boundary_archives(root: Path):
+    cache = root / ".asset-cache/naturalearth"
+    cache.mkdir(parents=True, exist_ok=True)
+
+    for source in BOUNDARY_SOURCES.values():
+        dest = cache / source["archive"]
+
+        if dest.exists():
+            continue
+
+        print(f"download {dest.relative_to(root)}")
+        urllib.request.urlretrieve(source["url"], dest)
+
+
+def iter_shapefile_parts(archive_path: Path, shape_name: str):
+    if not archive_path.exists():
+        return
+
+    with zipfile.ZipFile(archive_path) as archive:
+        with archive.open(shape_name) as handle:
+            data = handle.read()
+
+    offset = 100
+    total = len(data)
+
+    while offset + 8 <= total:
+        content_words = struct.unpack(">i", data[offset + 4:offset + 8])[0]
+        record_start = offset + 8
+        record_end = record_start + content_words*2
+        offset = record_end
+
+        if record_end > total or record_start + 44 > total:
+            break
+
+        shape_type = struct.unpack("<i", data[record_start:record_start + 4])[0]
+
+        if shape_type not in (3, 5):
+            continue
+
+        cursor = record_start + 36
+        part_count, point_count = struct.unpack("<2i", data[cursor:cursor + 8])
+        cursor += 8
+
+        if part_count <= 0 or point_count <= 0:
+            continue
+
+        parts = list(struct.unpack(f"<{part_count}i", data[cursor:cursor + part_count*4]))
+        cursor += part_count*4
+        points = []
+
+        for _ in range(point_count):
+            lon, lat = struct.unpack("<2d", data[cursor:cursor + 16])
+            cursor += 16
+            points.append((lon, lat))
+
+        parts.append(point_count)
+
+        for index in range(part_count):
+            start = parts[index]
+            end = parts[index + 1]
+
+            if end - start >= 2:
+                yield points[start:end]
+
+
+def project_lon_lat(lon: float, lat: float, width: int, height: int) -> tuple[float, float]:
+    x = ((lon + 180.0)/360.0)*float(width)
+    y = ((90.0 - lat)/180.0)*float(height)
+    return x, y
+
+
+def projected_segments(points, width: int, height: int):
+    segment = []
+    previous_x = None
+
+    for lon, lat in points:
+        x, y = project_lon_lat(lon, lat, width, height)
+
+        if previous_x is not None and abs(x - previous_x) > width*0.5:
+            if len(segment) >= 2:
+                yield segment
+            segment = []
+
+        segment.append((x, y))
+        previous_x = x
+
+    if len(segment) >= 2:
+        yield segment
+
+
+def draw_boundary_archive(draw, archive_path: Path, shape_name: str, width: int, height: int, fill, line_width: int):
+    count = 0
+
+    for points in iter_shapefile_parts(archive_path, shape_name):
+        for segment in projected_segments(points, width, height):
+            draw.line(segment, fill=fill, width=line_width, joint="curve")
+        count += 1
+
+    return count
+
+
+def overlay_boundaries(root: Path, image):
+    from PIL import ImageDraw
+
+    draw = ImageDraw.Draw(image, "RGBA")
+    width, height = image.size
+    state_width = max(1, round(width/4600))
+    country_width = max(state_width + 1, round(width/3300))
+    total = 0
+
+    state_source = BOUNDARY_SOURCES["state"]
+    country_source = BOUNDARY_SOURCES["country"]
+    state_archive = boundary_archive_path(root, state_source)
+    country_archive = boundary_archive_path(root, country_source)
+
+    if state_archive.exists():
+        total += draw_boundary_archive(
+            draw,
+            state_archive,
+            state_source["shape"],
+            width,
+            height,
+            (59, 48, 34, 72),
+            state_width)
+
+    if country_archive.exists():
+        total += draw_boundary_archive(
+            draw,
+            country_archive,
+            country_source["shape"],
+            width,
+            height,
+            (47, 35, 24, 116),
+            country_width)
+
+    if total > 0:
+        print(f"map boundaries features={total}")
+
+    return image
+
+
 def prepare_map_tiles(root: Path, source: Path, tile_size: int, qoiconv, sharpen_radius: float, sharpen_percent: int, sharpen_threshold: int):
     tile_root = root / "assets/maps/tiles"
     tile_dest = tile_root / "z1"
@@ -193,6 +387,7 @@ def prepare_map_tiles(root: Path, source: Path, tile_size: int, qoiconv, sharpen
     with Image.open(source) as image:
         image = ImageOps.exif_transpose(image).convert("RGB")
         image.load()
+        image = overlay_boundaries(root, image)
         width, height = image.size
         columns = (width + tile_size - 1) // tile_size
         rows = (height + tile_size - 1) // tile_size
@@ -256,6 +451,7 @@ def prepare_map(root: Path, base_width: int, tile_size: int, make_tiles: bool, s
             resized = (base_width, max(1, round(image.height * ratio)))
             image = image.resize(resized, Image.Resampling.LANCZOS)
 
+        image = overlay_boundaries(root, image)
         image = grade_map_image(image)
         image = sharpen_map_image(image, sharpen_radius, sharpen_percent, sharpen_threshold)
         image.save(png_dest, optimize=True)
@@ -275,18 +471,22 @@ def main():
     parser = argparse.ArgumentParser(description="Prepare 1080p travelpi assets.")
     parser.add_argument("--width", type=int, default=1920)
     parser.add_argument("--quality", type=int, default=88)
-    parser.add_argument("--photo-long-edge", type=int, default=1280)
+    parser.add_argument("--photo-long-edge", type=int, default=1600)
     parser.add_argument("--map-base-width", type=int, default=4096)
     parser.add_argument("--map-tile-size", type=int, default=512)
     parser.add_argument("--map-sharpen-radius", type=float, default=1.1)
     parser.add_argument("--map-sharpen-percent", type=int, default=150)
     parser.add_argument("--map-sharpen-threshold", type=int, default=2)
+    parser.add_argument("--download-map-boundaries", action="store_true")
     parser.add_argument("--no-map-tiles", action="store_true")
     parser.add_argument("--photos-only", action="store_true")
     parser.add_argument("--map-only", action="store_true")
     args = parser.parse_args()
 
     root = repo_root()
+
+    if args.download_map_boundaries:
+        download_boundary_archives(root)
 
     if not args.map_only:
         prepare_photos(root, args.width, args.quality, args.photo_long_edge)
