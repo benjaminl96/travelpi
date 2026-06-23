@@ -56,14 +56,17 @@ can render directly to the Linux graphics stack without X11 or Wayland.
 
 ## Personal Data
 
-This repository tracks code, map assets, and an example trip manifest. Your real
-trip manifest and photos stay local:
+This repository tracks the code, scripts, fonts, the example manifest, and the
+base map assets needed for the sample kiosk. Your real trip manifest, generated
+config, and larger runtime photo/map assets stay local:
 
 ```text
 config/trips.json
 src/travel_config.c
 assets/photos/*
 assets/source/photos/*
+assets/source/maps/world_map_highres.*
+assets/maps/tiles/*
 ```
 
 Those paths are ignored by Git so personal photos and location history do not
@@ -73,10 +76,32 @@ get pushed by accident. A fresh clone can still build because `make` generates
 manifest and falls back to the generated C config only when the JSON is absent
 or invalid.
 
-To create an editable local manifest from the example:
+To create an editable local manifest from the example on a fresh clone:
 
 ```sh
 python3 scripts/bootstrap_config.py
+```
+
+## Fresh Clone Quick Start
+
+If you just cloned the repo and want the shortest path to a working kiosk:
+
+```sh
+python3 -m pip install -r requirements-dev.txt
+python3 scripts/bootstrap_config.py
+./scripts/build_qoiconv.sh
+python3 scripts/prepare_assets.py --width 1920
+make
+```
+
+If you want to author trips from a folder of photos, use the import helper
+instead of editing JSON by hand:
+
+```sh
+python3 scripts/import_trip.py ~/Pictures/Iceland \
+  --name "Iceland Ring Road" \
+  --caption "June 2026" \
+  --prepare
 ```
 
 ## Prepare Assets
@@ -99,7 +124,7 @@ center from the median GPS coordinates, copies every readable still image into
 `assets/source/photos/`, appends `config/trips.json`, regenerates
 `src/travel_config.c`, and optionally runs the 1080p preparation step. At
 runtime, each trip is rendered as as many print-style gallery pages as needed,
-with up to two photos resident per page. Pages hold for 15 seconds by default
+with up to two photos resident per page. Pages hold for 11.25 seconds by default
 and page-to-page fades are intentionally quick.
 
 Trip names and captions are human-supplied because EXIF reliably gives capture
@@ -271,6 +296,8 @@ The kiosk executable links against that install.
 
 The default runtime and systemd service are set to `1920x1080`.
 The admin service listens on port `8080` by default.
+If your Pi username is not `benlee`, edit the `User=` line in the service files
+before enabling them.
 
 ## License
 
@@ -278,13 +305,23 @@ This project is licensed under the PolyForm Noncommercial License 1.0.0. Persona
 educational, hobby, and other noncommercial use is allowed; commercial use needs
 separate permission from the copyright holder.
 
-## Install Sketch
+## Deploy To Pi
+
+The systemd units expect the repo to live at `/opt/travelpi` on the Pi. One
+straightforward deploy flow is:
 
 ```sh
-sudo mkdir -p /opt/travelpi/bin
-sudo cp build/travelpi /opt/travelpi/bin/
-sudo cp -R assets /opt/travelpi/
-sudo cp -R admin config scripts /opt/travelpi/
+rsync -az --delete \
+  --exclude .git \
+  --exclude .asset-cache \
+  --exclude build \
+  --exclude __pycache__ \
+  ./ \
+  your-pi-user@travelpi.local:/opt/travelpi/
+ssh your-pi-user@travelpi.local
+./scripts/install_pi_deps.sh
+./scripts/build_raylib_drm.sh
+make pi
 sudo cp systemd/travelpi.service /etc/systemd/system/
 sudo cp systemd/travelpi-admin.service /etc/systemd/system/
 sudo systemctl daemon-reload
@@ -296,6 +333,13 @@ sudo systemctl start travelpi-admin.service
 Make sure the service user belongs to the `video` and `render` groups so it can
 open DRM/KMS devices.
 
+If you are importing a new photo folder and want the helper to stage the
+manifest, prepare assets, sync, and restart services in one shot, use:
+
+```sh
+python3 scripts/seed_pi_trips.py --remote travelpi.local --remote-root /opt/travelpi
+```
+
 ## Configure Trips
 
 Use the admin UI or edit `config/trips.json` directly. The renderer watches the
@@ -306,12 +350,13 @@ is still generated for fallback builds and compatibility with older workflows.
   texture with a simple equirectangular transform.
 - `pixel_nudge` is an art-direction offset in final map pixels for maps whose
   labels or visual geography need slight alignment correction.
-- `caption` is kept for manifest compatibility; the current lower bar shows a
-  right-aligned trip name and, when needed, a slightly smaller right-aligned
-  `page N/M` label for multi-page trips.
+- `caption` is kept for manifest compatibility; the current lower bar shows the
+  trip name and date inline on the left, with a right-aligned `page N/M` label
+  for multi-page trips.
 - `close_zoom` controls how far into the region the camera travels.
 - `hold_seconds`, `fade_seconds`, `zoom_in_seconds`, and `zoom_out_seconds`
   control the cinematic beat.
+- `hold_seconds` defaults to `11.25` seconds unless you override it per trip.
 - `photos[].path` points at prepared runtime files in `assets/photos/`.
 - `PhotoSpec.anchor` is legacy manifest layout data. The current renderer uses
   fixed non-overlapping gallery pages, but the field is still accepted for
